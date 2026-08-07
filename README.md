@@ -1,70 +1,38 @@
 # sop
 
-An implementation of the sop interchange format: a Rust core that parses, and a
-Python SDK that calls into it.
+An implementation of the sop interchange format: a Rust extension module that
+reads and writes, and a Python shape layer on top.
 
 There is no separate specification. **The format is what this implementation
 accepts**, and the tests are where that is written down:
 
 - `corpus.json` — 85 conformance cases, each an input and either its exact
-  serialised output or the fact that it is rejected. Run through both the core
-  and the SDK; the two reports must be byte-identical.
-- `python/test_shapes.py` — how Python types map onto sop values, in both
+  serialised output or the fact that it is rejected, enforced by
+  `tests/run_corpus.py`. The expected outputs are written by hand; the
+  implementation is never used to produce them.
+- `tests/test_shapes.py` — how Python types map onto sop values, in both
   directions, including every rejection.
-- `python/test_python.py` — the semantics that exist only on the Python side.
-- `python/test_properties.py` — Hypothesis properties: round trips, robustness
+- `tests/test_python.py` — the semantics that exist only on the Python side.
+- `tests/test_properties.py` — Hypothesis properties: round trips, robustness
   against arbitrary input, typed round trips per shape.
-- `rust/tests/parse.rs` — unbounded nesting, duplicate keys, accessor
-  behaviour.
 
 A quick tour of the syntax is in `corpus.json`'s valid cases; every construct
 the format has appears there with its canonical spelling.
 
-## The core
+## The implementation
 
-`rust/` parses text into a `Document`: a flat tape, two allocations for the
-whole document — a `Vec<Node>` in depth-first order and one string arena —
-with nothing boxed per node. 200 MB/s to parse, and walking a parsed document
-runs at 1.4 GB/s because reading it allocates nothing.
-
-```rust
-let doc = sop::Document::parse(text)?;
-let root = doc.root();
-for (key, value) in root.object() {
-    match value.kind() {
-        sop::Kind::Tagged => println!("{key}: {} …", value.tag().unwrap()),
-        sop::Kind::Symbol => println!("{key}: {}", value.symbol().unwrap()),
-        _ => {}
-    }
-}
-```
-
-The whole API is two ways in, a cursor, and a writer:
-
-```rust
-Document::parse(&str)                     -> Result<Document, Error>
-Builder::{new, int, float, string, symbol, tag, key,
-          begin_array/end_array, begin_object/end_object, finish}
-Document::to_string() / to_string_pretty(indent)
-Ref::{kind, as_i64, as_f64, as_str, symbol, tag, payload,
-      len, array, object, get}
-```
-
-`Builder` assembles a document that was never text — the bindings feed Python
-values through it — and the tape it produces is indistinguishable from a
-parsed one, so every formatting rule lives in the one writer.
-
-The parser and the writer are iterative, so nesting depth costs heap rather
-than stack and there is no depth limit: any input either parses or returns an
-`Error`.
-
-There is no owned value tree, no equality relation, no JSON projection and no
-linter in the core. It parses.
+One Rust crate, one pass each way. `loads` is a recursive-descent parser that
+builds Python objects directly as it lexes (`src/parse.rs`); `dumps` walks
+Python objects and spells them directly as text (`src/write.rs`); the lexical
+facts they share — what an identifier is, how a string is escaped, how a float
+is spelled — live once, in `src/text.rs`. There is no intermediate document
+tree, no owned value tree, and no Rust-facing API: the crate's library is
+named `_core`, after the extension module it becomes.
 
 ## The SDK
 
-`python/` is `sop._core`, the Rust core as an extension module, plus a shape
-layer. No pure-Python parser and no fallback. **Python 3.15 only** — the
+`python/` is `sop._core`, that extension module, plus a shape layer. No
+pure-Python parser and no fallback. **Python 3.15 only** — the
 extension is built against the interpreter it runs on, not the limited API.
 
 Two functions.
@@ -168,13 +136,13 @@ $.location.lat: expected a number, found a string
 $[0]: unknown tag `Unknown`; expected one of `Deposit`, `Reversal`, `Withdraw`
 ```
 
-The core reads and writes any depth; building or walking the Python value is
-recursive, so a pathologically deep or cyclic value raises `RecursionError` at
+Reading and writing are both recursive, guarded by CPython's own recursion
+check, so a pathologically deep or cyclic value raises `RecursionError` at
 the interpreter's own limit rather than a limit of the SDK's.
 
-The core has no booleans and no null. `true`, `false` and `null` are ordinary
-symbols to it; mapping them onto `True`, `False` and `None` is the SDK's
-decision, made in the bindings. `Symbol` and `Tagged` are native types and
+The format has no booleans and no null. `true`, `false` and `null` are
+ordinary symbols on the wire; mapping them onto `True`, `False` and `None` is
+the SDK's decision, made in the parser. `Symbol` and `Tagged` are native types and
 validate on construction: a symbol must be an identifier, `Symbol("null")` is
 refused because `null` already has a spelling on this side, and a `Tagged`
 cannot hold `None`, a bool or a `Symbol` — a tag cannot be applied to a bare
@@ -183,56 +151,49 @@ unable to hold a value the parser could never produce, so the writer is total
 and Python `==` is the only comparison you need. Comparing Python objects is
 Python's business.
 
-Throughput is machine-dependent; on one box, the core parses at 200 MB/s and
-the SDK at 38 MB/s, with the gap being the Python objects the SDK has to build.
-Writing goes through the core directly for values that came from `loads`.
+Throughput is machine-dependent; on one box, `loads` runs at ~40 MB/s, with
+the cost dominated by the Python objects it has to build.
 
 ## Layout
 
 ```
-build.sh             builds the core and the extension, installs the extension
+Cargo.toml           one crate, whose cdylib is the extension module
+pyproject.toml       the Python package, built by maturin
+build.sh             builds the extension into the active venv (maturin develop)
 build_corpus.py      generates corpus.json
 corpus.json          85 conformance cases
 
-rust/src/document.rs the tape: Document, Node, Ref, iterators
-rust/src/parser.rs   the scanner
-rust/src/ser.rs      writing a document back out
-rust/src/main.rs     the conformance runner
-rust/src/bin/bench.rs a benchmark, which generates its own input
-rust/tests/parse.rs  nesting, linearity, duplicate keys, accessors
-rust/fuzz/           two cargo-fuzz targets
-
-bindings/src/lib.rs  PyO3 bindings — marshalling only, no format logic
+src/lib.rs           the module: Symbol, Tagged, SopError, loads, dumps
+src/parse.rs         reading text into Python objects, one pass
+src/write.rs         writing Python objects out as text, one traversal
+src/text.rs          shared lexical facts: identifiers, escapes, number spelling
 
 python/sop/__init__.py the public API: loads and dumps
 python/sop/_shape.py  how Python types map onto sop values
 python/sop/_core.pyi  type stubs for the extension
-python/run_corpus.py  the conformance runner, SDK side
-python/test_shapes.py     the shape language, both directions, and its errors
-python/test_python.py     Python semantics: host types, native types, equality,
+python/sop/py.typed   PEP 561 marker, so checkers read the stubs
+
+tests/run_corpus.py   the conformance runner
+tests/test_shapes.py      the shape language, both directions, and its errors
+tests/test_python.py      Python semantics: host types, native types, equality,
                           numeric limits, the single-traversal write path
-python/test_properties.py Hypothesis property tests: round trips, robustness,
+tests/test_properties.py  Hypothesis property tests: round trips, robustness,
                           typed round trips per shape
 ```
 
 ## Running things
 
 ```sh
-./build.sh                                     # needs Rust and Python 3.15
-uv pip install .                               # or: the wheel, via maturin
-cd rust && cargo test --release
-cd python && python3.15 -m pytest
+uv venv --python 3.15 && . .venv/bin/activate  # needs Rust and Python 3.15
+./build.sh                                     # maturin develop --release
+uv pip install .                               # or: the wheel, via maturin build
+pytest                                         # against the installed build
+python3 tests/run_corpus.py                    # the 85 conformance cases
+maturin generate-stubs --out stubs -F stubs    # regenerate, diff against _core.pyi
 python3.15 -m mypy --python-version 3.15 python/sop
 python3.15 -m coverage run --branch --source=sop -m pytest && python3.15 -m coverage report
-cd rust && cargo llvm-cov --ignore-filename-regex 'bin/|main.rs' 
-cd rust/fuzz && cargo +nightly fuzz run parse -- -max_total_time=300
 ```
 
-Coverage: 100% branch on the Python package, and near-total line coverage on
-the Rust core (9 tests plus the corpus run); the uncovered core lines are
-`unreachable!()` arms and the 4 GiB size guards, which keep the tape's `u32`
-indices honest without a 4 GiB fixture.
-
-Conformance is `python3 python/run_corpus.py` against
-`cargo run --release --bin sop`: both write the same report format and their
-output must be byte-identical across all 85 cases.
+Coverage: 100% branch on the Python package; the Rust implementation is
+exercised end to end by the pytest suite, the corpus and the Hypothesis
+properties — there is no Rust-only surface left to test separately.

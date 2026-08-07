@@ -1,8 +1,9 @@
 target/
-_core.so
-rust/fuzz/corpus/
-rust/fuzz/artifacts/
+stubs/
 __pycache__/
 .hypothesis/
 .pytest_cache/
+.mypy_cache/
 .coverage
+.venv/
+python/sop/*.so

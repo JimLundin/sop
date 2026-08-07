@@ -1,4 +1,10 @@
-"""Type stubs for the Rust core extension module."""
+"""Type stubs for the Rust core extension module.
+
+Richer than `maturin generate-stubs -F stubs` can currently emit — the
+recursive `Value` alias and the typed `convert` callable are beyond the
+introspection output — so this file is kept by hand and reviewed against the
+generator's output on each PyO3 upgrade.
+"""
 
 from collections.abc import Callable
 from typing import Any, final

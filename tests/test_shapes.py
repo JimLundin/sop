@@ -1,6 +1,7 @@
 """The shape language: every shape, in both directions, and its errors.
 
-Run with `python3.15 -m pytest python/` from the repository root.
+Run with `pytest` from the repository root, against an installed build
+(`maturin develop`) — the in-tree package has no extension module.
 """
 
 import enum

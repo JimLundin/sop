@@ -120,9 +120,9 @@ VALID = [
     ("raw_u2028_in_string", '["a\u2028b"]', '["a\u2028b"]'),
     ("raw_u0085_in_string", '["a\u0085b"]', '["a\u0085b"]'),
     ("deep_nesting", "[[[[1]]]]", "[[[[1]]]]"),
-    # The grammar sets no depth bound and neither does the implementation: the
-    # parser and the writer are iterative, so nesting costs heap, not stack.
-    # 512 levels sits past every conventional recursion limit.
+    # The grammar sets no depth bound; the implementation is bounded only by
+    # the interpreter's own recursion guard.  512 levels sits past every
+    # conventional recursion limit and must still parse.
     ("deep_nesting_512", "[" * 512 + "1" + "]" * 512, "[" * 512 + "1" + "]" * 512),
     ("typed_response", TYPED_RESPONSE, TYPED_RESPONSE_OUT),
     ("discriminated_union", DISCRIMINATED_UNION, DISCRIMINATED_UNION_OUT),

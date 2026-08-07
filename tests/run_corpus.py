@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Runs corpus.json against the Python SDK, which is the Rust core behind the
-extension module.
+"""Runs corpus.json against the SDK.
 
-stdout is a deterministic report, one line per case, so that it can be diffed
-against the Rust runner's report.  Mismatches against the corpus's own
-expectations go to stderr and set a non-zero exit status.
+stdout is a deterministic report, one line per case.  Mismatches against the
+corpus's expectations go to stderr and set a non-zero exit status.
 """
 
 import pathlib
