@@ -183,13 +183,15 @@ tests/test_properties.py  Hypothesis property tests: round trips, robustness,
 
 ```sh
 uv venv --python 3.15 && . .venv/bin/activate  # needs Rust and Python 3.15
+uv pip install --group dev                     # the toolchain below
 maturin develop --release                      # build into the active venv
 uv pip install .                               # or: the wheel, via maturin build
-pytest                                         # against the installed build
-python3.15 -m mypy --python-version 3.15 python/sop
-python3.15 -m coverage run --branch --source=sop -m pytest && python3.15 -m coverage report
+pytest                                         # tests + branch coverage, 100% enforced
+ruff check --fix . && ruff format .            # lint and format
+mypy && pyright                                # both strict; configured in pyproject.toml
 ```
 
-Coverage: 100% branch on the Python package; the Rust implementation is
-exercised end to end by the pytest suite, the corpus and the Hypothesis
-properties — there is no Rust-only surface left to test separately.
+Coverage: 100% branch on the Python package, enforced by pytest itself
+(`--cov-fail-under=100`); the Rust implementation is exercised end to end by
+the pytest suite, the corpus and the Hypothesis properties — there is no
+Rust-only surface left to test separately.

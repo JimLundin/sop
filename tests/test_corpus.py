@@ -8,7 +8,6 @@ produce them.
 from typing import Any
 
 import pytest
-
 import sop
 
 TYPED_RESPONSE = """{
@@ -86,7 +85,11 @@ VALID = [
     ("right_associative", "a b c 1", "a b c 1"),
     ("two_symbols", "[a, b]", "[a,b]"),
     ("tag_on_array", 'set ["admin", "beta"]', 'set ["admin","beta"]'),
-    ("nested_tag_object", "geo { lat: 47.6062, lng: -122.3321 }", "geo {lat:47.6062,lng:-122.3321}"),
+    (
+        "nested_tag_object",
+        "geo { lat: 47.6062, lng: -122.3321 }",
+        "geo {lat:47.6062,lng:-122.3321}",
+    ),
     ("leading_plus", "[+7]", "[7]"),
     ("negative_zero", "[-0]", "[0]"),
     # A float keeps its point or exponent: number kind is spelling-determined,
@@ -110,7 +113,7 @@ VALID = [
     ("unicode_identifier", "{\u00e9t\u00e9: caf\u00e9}", "{\u00e9t\u00e9:caf\u00e9}"),
     # The source uses \u00e9 and \/; the serialiser emits e-acute raw and drops
     # the needless escape of the solidus.
-    ("escapes", r'["\u00e9\n\\\"\/\b\f\r\t"]', '["\u00e9' + r'\n\\\"/\b\f\r\t' + '"]'),
+    ("escapes", r'["\u00e9\n\\\"\/\b\f\r\t"]', '["\u00e9' + r"\n\\\"/\b\f\r\t" + '"]'),
     ("surrogate_pair", r'["\ud83d\ude00"]', '["\U0001f600"]'),
     ("astral_raw", '["\U0001f600"]', '["\U0001f600"]'),
     ("del_is_unescaped", '["\u007f"]', '["\u007f"]'),

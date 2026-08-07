@@ -35,11 +35,14 @@ The format itself is implemented once, in Rust (`sop._core`).  There is no
 pure-Python parser and no fallback.
 """
 
-from typing import Any as _Any, TypeForm as _TypeForm
+from typing import Any as _Any
+from typing import TypeForm as _TypeForm
+from typing import cast as _cast
 
 from . import _shape
 from ._core import SopError, Symbol, Tagged
-from ._core import dumps as _dumps, loads as _loads
+from ._core import dumps as _dumps
+from ._core import loads as _loads
 from ._shape import ShapeError
 
 __all__ = ["ShapeError", "SopError", "Symbol", "Tagged", "Value", "dumps", "loads"]
@@ -63,7 +66,7 @@ class _TypedLoads[T]:
         self._shape = shape
 
     def __call__(self, text: str) -> T:
-        return _shape.decode(_loads(text), self._shape)
+        return _cast("T", _shape.decode(_loads(text), self._shape))
 
     def __repr__(self) -> str:
         # `list[int].__name__` is "list", which loses the parameter; only a

@@ -32,12 +32,13 @@ import types
 import typing
 from annotationlib import Format, get_annotations
 from collections.abc import Callable
-from typing import Any, get_args, get_origin
+from typing import Any, TypeForm, get_args, get_origin
 
 from ._core import SopError, Symbol, Tagged
 
-type Shape = Any
-"""A type used as a schema.  Anything `TypeForm` accepts."""
+type Shape = TypeForm[Any] | None
+"""A type used as a schema: anything `TypeForm` accepts, and the bare `None`
+an annotation such as `deleted_at: None` evaluates to."""
 
 _NONE = type(None)
 
@@ -107,12 +108,12 @@ def _hints(cls: type) -> dict[str, Any]:
 
 
 @_cache
-def _fields(shape: type) -> tuple[tuple[dataclasses.Field, str], ...]:
+def _fields(shape: type) -> tuple[tuple[dataclasses.Field[Any], str], ...]:
     """Each field with its sop key, resolved once per class."""
     return tuple((f, _key(f)) for f in dataclasses.fields(shape))
 
 
-def _key(field: dataclasses.Field) -> str:
+def _key(field: dataclasses.Field[Any]) -> str:
     """The sop key for a field: `metadata={"sop": "from"}` names the wire key;
     otherwise the field's own name is used verbatim."""
     return str(field.metadata.get("sop", field.name))
@@ -166,7 +167,7 @@ def decode(value: Any, shape: Shape, path: str = "$") -> Any:
     # Untyped values are immutable -- tuples and frozendicts -- and the shape
     # declares whether the decoded result mutates: `list[T]` and `tuple[T,
     # ...]` read the same array, `dict` and `frozendict` the same object.
-    origin = get_origin(shape)
+    origin: Any = get_origin(shape)
     if origin in (typing.Union, types.UnionType):
         return _union(value, get_args(shape), path)
     if origin is list:
@@ -178,9 +179,7 @@ def decode(value: Any, shape: Shape, path: str = "$") -> Any:
             raise ShapeError(
                 path, f"unsupported shape {shape!r}: only `tuple[T, ...]` reads an array"
             )
-        return tuple(
-            decode(v, args[0], f"{path}[{i}]") for i, v in enumerate(_array(value, path))
-        )
+        return tuple(decode(v, args[0], f"{path}[{i}]") for i, v in enumerate(_array(value, path)))
     if origin in (set, frozenset):
         if not isinstance(value, Tagged) or value.tag != _SET_TAG:
             raise ShapeError(
@@ -195,41 +194,44 @@ def decode(value: Any, shape: Shape, path: str = "$") -> Any:
         args = get_args(shape) or (Any, Any)
         if args[0] not in (str, Any):
             raise ShapeError(path, f"unsupported shape {shape!r}: object keys are strings")
-        mapped = {k: decode(v, args[-1], f"{path}.{k}") for k, v in value.items()}
-        return mapped if origin is dict else frozendict(mapped)
+        obj: frozendict[str, Any] = value  # pyright: ignore[reportUnknownVariableType]
+        mapped: dict[str, Any] = {k: decode(v, args[-1], f"{path}.{k}") for k, v in obj.items()}
+        # The bundled stubs do not know frozendict's mapping constructor yet.
+        return mapped if origin is dict else frozendict(mapped)  # pyright: ignore[reportCallIssue]
 
     if isinstance(shape, type):
-        if issubclass(shape, enum.Enum):
-            return _decode_enum(value, shape, path)
-        if shape is bool:
+        cls: type[Any] = shape
+        if issubclass(cls, enum.Enum):
+            return _decode_enum(value, cls, path)
+        if cls is bool:
             if value is not True and value is not False:
                 raise ShapeError(path, f"expected `true` or `false`, found {_describe(value)}")
             return value
-        if shape is int:
+        if cls is int:
             # bool subclasses int in Python; a sop boolean is a symbol.
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ShapeError(path, f"expected an integer, found {_describe(value)}")
             return value
-        if shape is float:
+        if cls is float:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ShapeError(path, f"expected a number, found {_describe(value)}")
             return float(value)
-        if shape is str:
+        if cls is str:
             # A symbol is never a string, so `Active` is not "Active".
             if not isinstance(value, str):
                 raise ShapeError(path, f"expected a string, found {_describe(value)}")
             return value
-        if shape is Symbol or shape is Tagged:
-            if not isinstance(value, shape):
-                raise ShapeError(path, f"expected {shape.__name__}, found {_describe(value)}")
+        if cls is Symbol or cls is Tagged:
+            if not isinstance(value, cls):
+                raise ShapeError(path, f"expected {cls.__name__}, found {_describe(value)}")
             return value
-        if dataclasses.is_dataclass(shape):
-            return _decode_dataclass(value, shape, path)
+        if dataclasses.is_dataclass(cls):
+            return _decode_dataclass(value, cls, path)
         # Any other class with a *declared* tag is carried as a tagged
         # string; decode has ruled out the builtins, the enums and the
         # dataclasses by now.
-        if tag := _scalar_tag(shape):
-            return _decode_scalar(value, shape, tag, path)
+        if tag := _scalar_tag(cls):
+            return _decode_scalar(value, cls, tag, path)
 
     raise ShapeError(path, f"unsupported shape {shape!r}")
 
@@ -237,7 +239,8 @@ def decode(value: Any, shape: Shape, path: str = "$") -> Any:
 def _array(value: Any, path: str) -> tuple[Any, ...]:
     if not isinstance(value, tuple):
         raise ShapeError(path, f"expected an array, found {_describe(value)}")
-    return value
+    items: tuple[Any, ...] = value  # pyright: ignore[reportUnknownVariableType]
+    return items
 
 
 def _union(value: Any, members: tuple[Any, ...], path: str) -> Any:
@@ -282,7 +285,7 @@ def _union(value: Any, members: tuple[Any, ...], path: str) -> Any:
     if isinstance(value, Tagged) and (member := tagged.get(value.tag)):
         return decode(value, member, path)
 
-    reasons = []
+    reasons: list[str] = []
     for candidate in members:
         try:
             return decode(value, candidate, path)
@@ -364,15 +367,17 @@ def convert(obj: Any) -> Any:
             raise ShapeError(
                 "$", f"{type(obj).__name__}.{obj.name} has no symbol spelling: {exc}"
             ) from None
+    cls: type[Any] = type(obj)  # pyright: ignore[reportUnknownVariableType]
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         # The body is a mutable intermediate; the writer accepts the mutable
         # counterparts, it just never produces them, hence the casts.
-        body = {key: getattr(obj, field.name) for field, key in _fields(type(obj))}
-        tag = _tag_of(type(obj))
+        body = {key: getattr(obj, field.name) for field, key in _fields(cls)}
+        tag = _tag_of(cls)
         return Tagged(tag, typing.cast("Any", body)) if tag else body
-    if tag := _scalar_tag(type(obj)):
+    if tag := _scalar_tag(cls):
         return Tagged(tag, str(obj))
     if isinstance(obj, (set, frozenset)):
         # Sorted so output is stable; sop arrays are ordered and sets are not.
-        return Tagged(_SET_TAG, typing.cast("Any", sorted(obj, key=repr)))
-    raise ShapeError("$", f"cannot encode {type(obj).__name__}")
+        members: set[Any] | frozenset[Any] = obj  # pyright: ignore[reportUnknownVariableType]
+        return Tagged(_SET_TAG, typing.cast("Any", sorted(members, key=repr)))
+    raise ShapeError("$", f"cannot encode {cls.__name__}")

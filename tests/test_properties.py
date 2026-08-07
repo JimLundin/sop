@@ -12,10 +12,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+import sop
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-
-import sop
 
 settings.register_profile(
     "sop",
@@ -131,7 +130,7 @@ def test_arbitrary_text_never_crashes(text):
 
 @given(
     st.text(
-        alphabet=st.sampled_from(list('{}[](),:"\'/*\\+-.0123456789eE_$ \t\n\r\u2028')),
+        alphabet=st.sampled_from(list("{}[](),:\"'/*\\+-.0123456789eE_$ \t\n\r\u2028")),
         max_size=40,
     )
 )
@@ -184,16 +183,22 @@ class Iban(str):
         (set[str], st.sets(st.text(max_size=6), max_size=5)),
         (frozenset[str], st.frozensets(st.text(max_size=6), max_size=5)),
         (dict[str, int], st.dictionaries(st.text(max_size=6), integers, max_size=5)),
-        (dict[str, list[int]], st.dictionaries(
-            st.text(max_size=6), st.lists(integers, max_size=3), max_size=3)),
+        (
+            dict[str, list[int]],
+            st.dictionaries(st.text(max_size=6), st.lists(integers, max_size=3), max_size=3),
+        ),
         (int | None, st.none() | integers),
         (Colour, st.sampled_from(Colour)),
         (Iban, st.builds(Iban, st.text(max_size=8))),
         (Point, st.builds(Point, integers, floats)),
         (Named, st.builds(Named, st.text(max_size=8))),
-        (list[Point | Named], st.lists(
-            st.builds(Point, integers, floats) | st.builds(Named, st.text(max_size=6)),
-            max_size=4)),
+        (
+            list[Point | Named],
+            st.lists(
+                st.builds(Point, integers, floats) | st.builds(Named, st.text(max_size=6)),
+                max_size=4,
+            ),
+        ),
         (sop.Tagged, st.builds(sop.Tagged, identifiers, st.text(max_size=8))),
     ],
 )

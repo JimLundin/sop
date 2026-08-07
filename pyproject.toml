@@ -18,3 +18,31 @@ python-source = "python"
 # Turns on pyo3/extension-module for maturin builds only, so plain cargo
 # commands (cargo test, cargo check) still link.
 features = ["extension-module"]
+
+[dependency-groups]
+dev = [
+    "hypothesis",
+    "maturin",
+    "mypy",
+    "pyright",
+    "pytest",
+    "pytest-cov",
+    "ruff",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP"]
+
+[tool.mypy]
+files = ["python/sop"]
+strict = true
+
+[tool.pyright]
+include = ["python/sop"]
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+addopts = "--cov=sop --cov-branch --cov-fail-under=100 --cov-report=term-missing"

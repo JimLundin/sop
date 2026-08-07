@@ -12,7 +12,6 @@ from typing import Annotated, Any
 from uuid import UUID
 
 import pytest
-
 import sop
 
 # ---------------------------------------------------------------------------
@@ -41,7 +40,7 @@ class Instant(datetime):
     __sop_tag__ = "instant"
 
     @classmethod
-    def __sop_parse__(cls, text: str) -> "Instant":
+    def __sop_parse__(cls, text: str) -> Instant:
         return cls.fromisoformat(text)
 
 
@@ -370,8 +369,12 @@ def test_sop_parse_hook():
 
 @pytest.mark.parametrize(
     "shape, value",
-    [(Iban, Iban("DE89")), (Money, Money("19.99")), (Id, Id(int=7)),
-     (Instant, Instant(2026, 8, 5, 14, 23, 11))],
+    [
+        (Iban, Iban("DE89")),
+        (Money, Money("19.99")),
+        (Id, Id(int=7)),
+        (Instant, Instant(2026, 8, 5, 14, 23, 11)),
+    ],
 )
 def test_tagged_scalar_roundtrip(shape, value):
     assert roundtrip(shape, value) == value
