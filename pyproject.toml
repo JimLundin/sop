@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.7"]
+build-backend = "maturin"
+
+[project]
+name = "sop"
+# The version is single-sourced from bindings/Cargo.toml.
+dynamic = ["version"]
+description = "The sop interchange format: a Rust core with a Python SDK"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.15"
+
+[tool.maturin]
+manifest-path = "bindings/Cargo.toml"
+module-name = "sop._core"
+python-source = "python"
+# build.sh drops a bare _core.so into the tree for development; the wheel
+# carries its own tagged extension module.
+exclude = ["python/sop/_core.so"]

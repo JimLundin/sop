@@ -82,13 +82,15 @@ VALID = [
     ("symbol", "foo", "foo"),
     ("tag_named_true", 'true "x"', 'true "x"'),
     ("right_associative", "a b c 1", "a b c 1"),
-    ("adjacent_identifiers", "[a b]", "[a b]"),
     ("two_symbols", "[a, b]", "[a,b]"),
     ("tag_on_array", 'set ["admin", "beta"]', 'set ["admin","beta"]'),
     ("nested_tag_object", "geo { lat: 47.6062, lng: -122.3321 }", "geo {lat:47.6062,lng:-122.3321}"),
     ("leading_plus", "[+7]", "[7]"),
     ("negative_zero", "[-0]", "[0]"),
-    ("exponent", "[-2.5e10]", "[-25000000000]"),
+    # A float keeps its point or exponent: number kind is spelling-determined,
+    # so a whole float never reads back as an integer.
+    ("exponent", "[-2.5e10]", "[-25000000000.0]"),
+    ("negative_zero_float", "[-0.0]", "[-0.0]"),
     ("fraction", "[0.5,1.25]", "[0.5,1.25]"),
     ("tenth", "[0.1]", "[0.1]"),
     ("beyond_double_precision", "[9007199254740993]", "[9007199254740993]"),
@@ -99,7 +101,7 @@ VALID = [
     ("large_float", "[1e30]", "[1000000000000000000000000000000.0]"),
     ("small_float", "[1.5e-5]", "[0.000015]"),
     ("float_repr", "[1e16]", "[10000000000000000.0]"),
-    ("float_underflow", "[1e-400]", "[0]"),
+    ("float_underflow", "[1e-400]", "[0.0]"),
     ("duplicate_keys", "{a:1,a:2}", "{a:2}"),
     ("bom", "\ufeff{}", "{}"),
     ("unicode_whitespace_2028", "[\u20281\u2028]", "[1]"),
@@ -129,6 +131,10 @@ VALID = [
 
 INVALID = [
     ("tag_on_key", "{ foo bar: 1 }"),
+    # A tag's payload is never a bare symbol; without this rule, a missing
+    # comma between two identifiers would silently denote one tagged value.
+    ("tag_on_symbol", "[a b]"),
+    ("tag_on_null", "secret null"),
     ("number_as_tag", "[1 2]"),
     ("missing_comma_object", "{a: 1 b: 2}"),
     ("no_digit_before_point", "[.5]"),

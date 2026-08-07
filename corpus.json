@@ -86,11 +86,6 @@
       "out": "a b c 1"
     },
     {
-      "name": "adjacent_identifiers",
-      "src": "[a b]",
-      "out": "[a b]"
-    },
-    {
       "name": "two_symbols",
       "src": "[a, b]",
       "out": "[a,b]"
@@ -118,7 +113,12 @@
     {
       "name": "exponent",
       "src": "[-2.5e10]",
-      "out": "[-25000000000]"
+      "out": "[-25000000000.0]"
+    },
+    {
+      "name": "negative_zero_float",
+      "src": "[-0.0]",
+      "out": "[-0.0]"
     },
     {
       "name": "fraction",
@@ -163,7 +163,7 @@
     {
       "name": "float_underflow",
       "src": "[1e-400]",
-      "out": "[0]"
+      "out": "[0.0]"
     },
     {
       "name": "duplicate_keys",
@@ -255,6 +255,14 @@
     {
       "name": "tag_on_key",
       "src": "{ foo bar: 1 }"
+    },
+    {
+      "name": "tag_on_symbol",
+      "src": "[a b]"
+    },
+    {
+      "name": "tag_on_null",
+      "src": "secret null"
     },
     {
       "name": "number_as_tag",

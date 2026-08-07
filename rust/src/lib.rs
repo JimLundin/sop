@@ -31,6 +31,14 @@ impl Document {
     /// is iterative, so depth costs heap rather than stack, and any input
     /// either parses or returns an [`Error`].
     pub fn parse(src: &str) -> Result<Document, Error> {
+        // The tape indexes nodes and text with u32, so a larger document has
+        // no representation; refusing it up front keeps the contract that any
+        // input either parses or returns an `Error`. A parse within the limit
+        // cannot overflow: every node and every decoded byte consumes at
+        // least one source byte.
+        if src.len() > u32::MAX as usize {
+            return Err(Error { message: "document exceeds 4 GiB".to_string(), line: 1, column: 1 });
+        }
         parser::Parser::new(src).parse_document()
     }
 }

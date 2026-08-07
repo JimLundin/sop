@@ -219,14 +219,42 @@ def test_list_rejects_an_object():
         sop.loads[list[int]]("{a:1}")
 
 
-def test_tuple_is_not_a_shape():
-    # sop has one array form; tuple would be a second spelling of list.
-    with pytest.raises(sop.ShapeError, match="unsupported shape"):
-        sop.loads[tuple[int, ...]]("[1]")
+def test_tuple_reads_an_array_immutably():
+    # The wire value is the one `list[T]` reads; the shape declares that the
+    # result does not mutate.
+    assert sop.loads[tuple[int, ...]]("[1,2]") == (1, 2)
+    assert sop.loads[tuple[int, ...]]("[]") == ()
+    assert roundtrip(tuple[int, ...], (1, 2, 3)) == (1, 2, 3)
+
+
+def test_only_the_homogeneous_tuple_is_a_shape():
+    # `tuple[int, str]` is a row type, which a sop array does not model.
+    with pytest.raises(sop.ShapeError, match=r"only `tuple\[T, \.\.\.\]`"):
+        sop.loads[tuple[int, str]]("[1]")
 
 
 def test_tuples_are_written_as_arrays():
     assert sop.dumps((1, 2)) == "[1,2]"
+
+
+def test_frozenset_reads_a_tagged_array_immutably():
+    value = sop.loads[frozenset[str]]('set ["a", "b"]')
+    assert value == frozenset({"a", "b"}) and isinstance(value, frozenset)
+    assert roundtrip(frozenset[str], frozenset({"a", "b"})) == {"a", "b"}
+
+
+def test_dict_keys_must_be_str_shaped():
+    # An object's keys are strings; a shape claiming otherwise would decode to
+    # something its own annotation contradicts.
+    with pytest.raises(sop.ShapeError, match="object keys are strings"):
+        sop.loads[dict[int, int]]("{a: 1}")
+    assert sop.loads[dict[Any, int]]("{a: 1}") == {"a": 1}
+
+
+def test_frozendict_shape_reads_an_object_immutably():
+    value = sop.loads[frozendict[str, int]]("{a: 1}")
+    assert isinstance(value, frozendict) and value == {"a": 1}
+    assert sop.loads[dict[str, int]]("{a: 1}") == {"a": 1}  # dict opts into mutation
 
 
 # ---------------------------------------------------------------------------
@@ -238,8 +266,11 @@ def test_enum_by_value():
     assert sop.loads[Colour]("azul") is Colour.Blue
 
 
-def test_enum_by_name():
-    assert sop.loads[Colour]("Blue") is Colour.Blue
+def test_enum_reads_only_its_spelling():
+    # `Blue` is written `azul`; the member's Python name is not a second
+    # accepted spelling.
+    with pytest.raises(sop.ShapeError, match="`Blue` is not one of `Red`, `azul`"):
+        sop.loads[Colour]("Blue")
 
 
 def test_enum_writes_its_value():
@@ -260,6 +291,18 @@ def test_enum_rejects_an_unknown_symbol():
         sop.loads[Colour]("Green")
 
 
+def test_an_enum_value_with_no_symbol_spelling_is_a_shape_error():
+    # Only SopError escapes the shape layer; Symbol's own ValueError does not.
+    class Weird(enum.Enum):
+        Spaced = "not an identifier"
+        Reserved = "true"
+
+    with pytest.raises(sop.ShapeError, match="Weird.Spaced has no symbol spelling"):
+        sop.dumps(Weird.Spaced)
+    with pytest.raises(sop.ShapeError, match="Weird.Reserved has no symbol spelling"):
+        sop.dumps(Weird.Reserved)
+
+
 # ---------------------------------------------------------------------------
 # Tags on classes
 # ---------------------------------------------------------------------------
@@ -277,7 +320,7 @@ def test_none_opts_out_of_the_tag():
 
 def test_an_explicit_tag_overrides_the_name():
     assert sop.loads[Geo]("geo { lat: 1, lng: 2 }") == Geo(1.0, 2.0)
-    assert sop.dumps(Geo(1.0, 2.0)) == "geo {lat:1,lng:2}"
+    assert sop.dumps(Geo(1.0, 2.0)) == "geo {lat:1.0,lng:2.0}"
 
 
 def test_a_tagged_class_rejects_a_bare_object():
@@ -355,6 +398,20 @@ def test_unknown_tags_survive_as_Tagged():
     assert sop.dumps(value) == 'duration "PT15M"'
 
 
+def test_a_class_without_a_declared_tag_is_not_a_scalar():
+    # A dataclass declares its fields, so its name can carry it as an object;
+    # an arbitrary class declares nothing, so without an explicit
+    # `__sop_tag__` it is not carried at all -- rather than being spelled
+    # `Anon "<object at 0x…>"` through `str`.
+    class Anon:
+        pass
+
+    with pytest.raises(sop.ShapeError, match="cannot encode Anon"):
+        sop.dumps(Anon())
+    with pytest.raises(sop.ShapeError, match="unsupported shape"):
+        sop.loads[Anon]('"x"')
+
+
 # ---------------------------------------------------------------------------
 # Unions
 # ---------------------------------------------------------------------------
@@ -395,6 +452,23 @@ def test_untagged_union_reports_every_reason():
 def test_mixed_union():
     assert sop.loads[Deposit | int]("7") == 7
     assert isinstance(sop.loads[Deposit | int]('Deposit { amount: decimal "1" }'), Deposit)
+
+
+def test_a_shared_tag_in_a_union_is_an_error():
+    # A shared discriminant is a schema bug; silently degrading to trying
+    # members in order would hide it until the members diverged.
+    @dataclass
+    class One:
+        __sop_tag__ = "dup"
+        x: int
+
+    @dataclass
+    class Two:
+        __sop_tag__ = "dup"
+        y: int
+
+    with pytest.raises(sop.ShapeError, match="share the tag `dup`"):
+        sop.loads[One | Two]("dup {x: 1}")
 
 
 @dataclass
@@ -446,18 +520,27 @@ def test_kind_matched_members_do_not_discriminate():
 @dataclass
 class Fields:
     __sop_tag__ = None
-    from_: str  # a trailing underscore is stripped
-    cls_: str = field(default="c", metadata={"sop": "class"})  # explicit alias
+    from_: str = field(metadata={"sop": "from"})  # metadata names the wire key
+    cls_: str = field(default="c", metadata={"sop": "class"})
     n: int = 3  # default
     computed: int = field(init=False, default=0)  # not read back
 
 
-def test_trailing_underscore_is_stripped():
+def test_metadata_names_the_wire_key():
     assert sop.loads[Fields]('{from: "x"}').from_ == "x"
-
-
-def test_metadata_alias_wins():
     assert sop.loads[Fields]('{from: "x", class: "y"}').cls_ == "y"
+
+
+def test_a_field_name_is_otherwise_verbatim():
+    # One aliasing mechanism: without metadata, the field's own name is the
+    # wire key, underscore and all.
+    @dataclass
+    class Verbatim:
+        __sop_tag__ = None
+        key_: str
+
+    assert sop.loads[Verbatim]('{key_: "x"}').key_ == "x"
+    assert sop.dumps(Verbatim("x")) == '{key_:"x"}'
 
 
 def test_defaults_are_used_when_a_key_is_absent():
@@ -475,6 +558,23 @@ def test_unknown_keys_are_ignored():
 
 def test_init_false_fields_are_not_read():
     assert sop.loads[Fields]('{from: "x", computed: 9}').computed == 0
+
+
+def test_a_validating_dataclass_reports_a_shape_error():
+    # A `__post_init__` that raises ValueError is the document missing the
+    # shape, and it surfaces with a path like every other mismatch.
+    @dataclass
+    class Positive:
+        __sop_tag__ = None
+        n: int
+
+        def __post_init__(self) -> None:
+            if self.n < 0:
+                raise ValueError("n must be positive")
+
+    with pytest.raises(sop.ShapeError, match="not a valid Positive") as caught:
+        sop.loads[list[Positive]]("[{n: -1}]")
+    assert caught.value.path == "$[0]"
 
 
 def test_field_names_are_written_with_their_alias():

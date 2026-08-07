@@ -6,7 +6,7 @@ Python SDK that calls into it.
 There is no separate specification. **The format is what this implementation
 accepts**, and the tests are where that is written down:
 
-- `corpus.json` — 83 conformance cases, each an input and either its exact
+- `corpus.json` — 85 conformance cases, each an input and either its exact
   serialised output or the fact that it is rejected. Run through both the core
   and the SDK; the two reports must be byte-identical.
 - `python/test_shapes.py` — how Python types map onto sop values, in both
@@ -79,11 +79,19 @@ text = sop.dumps(order)
 
 Reading takes a shape because text carries no type; writing does not, because
 the object does. There is no shapeless `loads` — `loads[Any]` is the escape
-hatch and it has to be written down.
+hatch and it has to be written down. `Value` names the closed set untyped
+reading can produce — `None | bool | int | float | str | Symbol | Tagged |
+tuple[Value, ...] | frozendict[str, Value]` — so `loads[Value]` is the same
+escape hatch with its result typed precisely.
 
-The whole public API is six names: `loads`, `dumps`, `Symbol`, `Tagged`,
-`SopError`, and `ShapeError` (a subclass of `SopError`, so one `except` covers
-both).
+Everything read is immutable. Mutation is opt-in: a shape such as `list[T]`
+or `dict[str, V]` declares it, and the decoded result is freshly built.
+Writing accepts the mutable counterparts — `dict`, `list`, `set` — and spells
+them identically.
+
+The whole public API is seven names: `loads`, `dumps`, `Value`, `Symbol`,
+`Tagged`, `SopError`, and `ShapeError` (a subclass of `SopError`, so one
+`except` covers both).
 
 The subscript is annotated `TypeForm[T]` (PEP 747), so shapes that are not
 classes work too — `sop.loads[Order | None](text)` reveals as `Order | None`,
@@ -95,7 +103,7 @@ A class is carried under its own name unless it says otherwise:
 @dataclass
 class Deposit:                # carried as `Deposit { ... }`
     amount: Money
-    from_: str                # reads the key `from`
+    from_: str = field(metadata={"sop": "from"})   # reads the key `from`
 
 @dataclass
 class Account:
@@ -109,7 +117,11 @@ events = sop.loads[list[Event]](text)
 ```
 
 Builtins are exempt from the default: `str` and `list` are how the format's own
-types are spelled, not user classes waiting for a tag.
+types are spelled, not user classes waiting for a tag. The name default
+carries *dataclasses*, whose fields are declared; any other class is carried
+only if it names a tag explicitly — there is no declared way to spell an
+arbitrary object, so one that never opted in fails loudly instead of being
+written through `str`.
 
 A tagged dataclass is a tagged object; anything else with a tag is a tagged
 string, built with `cls(text)` and spelled with `str(obj)`. A type that cannot
@@ -132,8 +144,11 @@ the wire. That is a schema decision and it belongs to the schema.
 |---|---|
 | `@dataclass class X` | an object, or `X { ... }` if the class is tagged |
 | `list[T]` | an array |
+| `tuple[T, ...]` | an array, like `list[T]`, read back immutable |
 | `set[T]` | `set [ ... ]` — a *tagged* array, not a bare one |
+| `frozenset[T]` | `set [ ... ]`, like `set[T]`, read back immutable |
 | `dict[str, V]` | an object with uniform values |
+| `frozendict[str, V]` | an object, like `dict[str, V]`, read back immutable |
 | `X \| None` | the value, or the symbol `null` |
 | `A \| B \| C` | a discriminated union, keyed on the tag |
 | `Enum` | a symbol, matched on its spelling |
@@ -141,6 +156,10 @@ the wire. That is a schema decision and it belongs to the schema.
 | `str` | a string, never a symbol |
 | `sop.Tagged` | any tagged value, tag preserved |
 | `Any` | whatever was there |
+
+Number kind is spelling-determined — digits alone denote an integer, a point
+or an exponent a float — and writing preserves it, the sign of `-0.0`
+included.
 
 Errors name the path:
 
@@ -156,10 +175,13 @@ the interpreter's own limit rather than a limit of the SDK's.
 The core has no booleans and no null. `true`, `false` and `null` are ordinary
 symbols to it; mapping them onto `True`, `False` and `None` is the SDK's
 decision, made in the bindings. `Symbol` and `Tagged` are native types and
-validate on construction: a symbol must be an identifier, and `Symbol("null")`
-is refused because `null` already has a spelling on this side. That makes them unable to hold a value the
-parser could never produce, so the writer is total and Python `==` is the only
-comparison you need. Comparing Python objects is Python's business.
+validate on construction: a symbol must be an identifier, `Symbol("null")` is
+refused because `null` already has a spelling on this side, and a `Tagged`
+cannot hold `None`, a bool or a `Symbol` — a tag cannot be applied to a bare
+symbol, so such a value could never be written or read back. That makes them
+unable to hold a value the parser could never produce, so the writer is total
+and Python `==` is the only comparison you need. Comparing Python objects is
+Python's business.
 
 Throughput is machine-dependent; on one box, the core parses at 200 MB/s and
 the SDK at 38 MB/s, with the gap being the Python objects the SDK has to build.
@@ -170,7 +192,7 @@ Writing goes through the core directly for values that came from `loads`.
 ```
 build.sh             builds the core and the extension, installs the extension
 build_corpus.py      generates corpus.json
-corpus.json          83 conformance cases
+corpus.json          85 conformance cases
 
 rust/src/document.rs the tape: Document, Node, Ref, iterators
 rust/src/parser.rs   the scanner
@@ -188,7 +210,7 @@ python/sop/_core.pyi  type stubs for the extension
 python/run_corpus.py  the conformance runner, SDK side
 python/test_shapes.py     the shape language, both directions, and its errors
 python/test_python.py     Python semantics: host types, native types, equality,
-                          numeric limits, the write fast path
+                          numeric limits, the single-traversal write path
 python/test_properties.py Hypothesis property tests: round trips, robustness,
                           typed round trips per shape
 ```
@@ -197,6 +219,7 @@ python/test_properties.py Hypothesis property tests: round trips, robustness,
 
 ```sh
 ./build.sh                                     # needs Rust and Python 3.15
+uv pip install .                               # or: the wheel, via maturin
 cd rust && cargo test --release
 cd python && python3.15 -m pytest
 python3.15 -m mypy --python-version 3.15 python/sop
@@ -205,10 +228,11 @@ cd rust && cargo llvm-cov --ignore-filename-regex 'bin/|main.rs'
 cd rust/fuzz && cargo +nightly fuzz run parse -- -max_total_time=300
 ```
 
-Coverage: 100% branch on the Python package (174 tests), and near-total line
-coverage on the Rust core (8 tests plus the corpus run); the uncovered core
-lines are `unreachable!()` arms.
+Coverage: 100% branch on the Python package, and near-total line coverage on
+the Rust core (9 tests plus the corpus run); the uncovered core lines are
+`unreachable!()` arms and the 4 GiB size guards, which keep the tape's `u32`
+indices honest without a 4 GiB fixture.
 
 Conformance is `python3 python/run_corpus.py` against
 `cargo run --release --bin sop`: both write the same report format and their
-output must be byte-identical across all 83 cases.
+output must be byte-identical across all 85 cases.

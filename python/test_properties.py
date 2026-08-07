@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from hypothesis import HealthCheck, assume, given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 import sop
@@ -50,15 +50,35 @@ scalars = (
 )
 
 
+def _taggable(value: Any) -> bool:
+    """A tag cannot be applied to a bare symbol, so `Tagged` refuses `None`,
+    booleans and `Symbol` payloads."""
+    return not (value is None or isinstance(value, (bool, sop.Symbol)))
+
+
 def containers(children: st.SearchStrategy[Any]) -> st.SearchStrategy[Any]:
+    # Untyped reading produces immutable values, so the round-trip strategies
+    # generate those; the mutable counterparts are covered by the
+    # write-equivalence property below.
     return (
-        st.lists(children, max_size=4)
-        | st.dictionaries(st.text(max_size=8), children, max_size=4)
-        | st.builds(sop.Tagged, identifiers, children)
+        st.lists(children, max_size=4).map(tuple)
+        | st.dictionaries(st.text(max_size=8), children, max_size=4).map(frozendict)
+        | st.builds(sop.Tagged, identifiers, children.filter(_taggable))
     )
 
 
 values = st.recursive(scalars, containers, max_leaves=12)
+
+
+def _thaw(value: Any) -> Any:
+    """The mutable counterpart: tuples as lists, frozendicts as dicts."""
+    if isinstance(value, tuple):
+        return [_thaw(v) for v in value]
+    if isinstance(value, frozendict):
+        return {k: _thaw(v) for k, v in value.items()}
+    if isinstance(value, sop.Tagged):
+        return sop.Tagged(value.tag, _thaw(value.value))
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +89,12 @@ values = st.recursive(scalars, containers, max_leaves=12)
 @given(values)
 def test_a_value_survives_a_round_trip(value):
     assert sop.loads[Any](sop.dumps(value)) == value
+
+
+@given(values)
+def test_value_is_total_over_untyped_reading(value):
+    # Everything untyped reading can produce fits the `Value` shape.
+    assert sop.loads[sop.Value](sop.dumps(value)) == value
 
 
 @given(values)
@@ -83,6 +109,13 @@ def test_indentation_is_presentation_only(value):
 
 
 @given(values)
+def test_mutable_counterparts_write_identically(value):
+    # dict, list and their nested mixtures spell exactly as their immutable
+    # counterparts; only reading is immutable-only.
+    assert sop.dumps(_thaw(value)) == sop.dumps(value)
+
+
+@given(values.filter(_taggable))
 def test_a_tag_is_not_transparent(value):
     # A tagged value is never equal to its payload.
     assert sop.Tagged("t", value) != value
@@ -152,7 +185,9 @@ class Iban(str):
         (str, st.text(max_size=12)),
         (bool, st.booleans()),
         (list[int], st.lists(integers, max_size=5)),
+        (tuple[int, ...], st.lists(integers, max_size=5).map(tuple)),
         (set[str], st.sets(st.text(max_size=6), max_size=5)),
+        (frozenset[str], st.frozensets(st.text(max_size=6), max_size=5)),
         (dict[str, int], st.dictionaries(st.text(max_size=6), integers, max_size=5)),
         (dict[str, list[int]], st.dictionaries(
             st.text(max_size=6), st.lists(integers, max_size=3), max_size=3)),
@@ -194,14 +229,17 @@ def test_integers_out_of_range_are_refused(value):
 
 @given(floats)
 def test_floats_keep_their_value(value):
+    # Including the sign of zero: a float's spelling always carries a point
+    # or an exponent, so nothing is folded into an integer on the way out.
     read = sop.loads[float](sop.dumps(value))
-    assert read == value or (value == 0.0 and read == 0.0)
+    assert read == value and math.copysign(1, read) == math.copysign(1, value)
 
 
 @given(floats)
-def test_a_whole_float_never_reads_back_as_a_different_number(value):
-    assume(value.is_integer() and abs(value) < 2**63)
-    assert sop.loads[Any](sop.dumps(value)) == value
+def test_a_float_reads_back_as_a_float(value):
+    # Number kind is spelling-determined and writing preserves it.
+    read = sop.loads[Any](sop.dumps(value))
+    assert isinstance(read, float) and read == value
 
 
 @given(st.sampled_from([math.inf, -math.inf, math.nan]))

@@ -245,6 +245,8 @@ impl<'a> Iterator for ObjectIter<'a> {
 ///
 /// Structure is asserted, not returned: a key outside an object, a mismatched
 /// `end_`, or a second root is a programmer error in the caller, not bad data.
+/// Size is asserted the same way: the tape indexes with `u32`, so a document
+/// past 4 GiB of text or nodes panics rather than wrapping.
 pub struct Builder {
     nodes: Vec<Node>,
     strings: String,
@@ -265,9 +267,18 @@ impl Builder {
     }
 
     fn intern(&mut self, text: &str) -> Span {
+        assert!(
+            self.strings.len() + text.len() <= u32::MAX as usize,
+            "a document holds at most 4 GiB of text"
+        );
         let start = self.strings.len() as u32;
         self.strings.push_str(text);
         Span { start, len: text.len() as u32 }
+    }
+
+    /// One past the tape, as the `u32` a composite node stores.
+    fn here(&self) -> u32 {
+        u32::try_from(self.nodes.len()).expect("a document holds at most 4 billion nodes")
     }
 
     /// A value is legal at the root, in an array, under a tag, or after a key.
@@ -287,7 +298,8 @@ impl Builder {
                     let Node::Tag { name, .. } = self.nodes[at] else {
                         unreachable!("a tag frame points at a tag node")
                     };
-                    self.nodes[at] = Node::Tag { name, end: self.nodes.len() as u32 };
+                    let end = self.here();
+                    self.nodes[at] = Node::Tag { name, end };
                 }
                 Some(Frame::Array(_, len)) => {
                     *len += 1;
@@ -325,9 +337,14 @@ impl Builder {
     }
 
     /// `name` must be an identifier. `true`, `false` and `null` are written
-    /// this way — to the core they are ordinary symbols.
+    /// this way — to the core they are ordinary symbols. A symbol cannot be
+    /// a tag's payload, exactly as the parser will not read one.
     pub fn symbol(&mut self, name: &str) {
         assert!(is_identifier(name), "a symbol is an identifier");
+        assert!(
+            !matches!(self.frames.last(), Some(Frame::Tag(_))),
+            "a tag cannot be applied to a bare symbol"
+        );
         self.slot();
         let span = self.intern(name);
         self.nodes.push(Node::Symbol(span));
@@ -353,7 +370,8 @@ impl Builder {
         let Some(Frame::Array(at, len)) = self.frames.pop() else {
             panic!("`end_array` closes the innermost `begin_array`");
         };
-        self.nodes[at] = Node::Array { len, end: self.nodes.len() as u32 };
+        let end = self.here();
+        self.nodes[at] = Node::Array { len, end };
         self.settle();
     }
 
@@ -368,7 +386,8 @@ impl Builder {
             panic!("`end_object` closes the innermost `begin_object`");
         };
         assert!(!pending, "the last key has no value");
-        self.nodes[at] = Node::Object { len, end: self.nodes.len() as u32 };
+        let end = self.here();
+        self.nodes[at] = Node::Object { len, end };
         self.settle();
     }
 

@@ -1,6 +1,13 @@
 """Type stubs for the Rust core extension module."""
 
+from collections.abc import Callable
 from typing import Any, final
+
+# The closed set the core can decode.  Kept in step with `sop.Value`, which
+# cannot be imported here without a cycle through the package.
+type Value = (
+    None | bool | int | float | str | Symbol | Tagged | tuple[Value, ...] | frozendict[str, Value]
+)
 
 class SopError(ValueError):
     message: str
@@ -16,8 +23,11 @@ class Symbol:
 @final
 class Tagged:
     tag: str
-    value: Any
-    def __init__(self, tag: str, value: Any) -> None: ...
+    value: Value
+    def __init__(self, tag: str, value: Value) -> None: ...
+    def __hash__(self) -> int: ...
 
-def loads(text: str) -> Any: ...
-def dumps(value: Any, indent: int | None = ...) -> str: ...
+def loads(text: str) -> Value: ...
+def dumps(
+    value: Any, indent: int | None = ..., convert: Callable[[Any], Any] | None = ...
+) -> str: ...

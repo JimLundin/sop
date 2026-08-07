@@ -162,7 +162,7 @@ impl<'a> Parser<'a> {
     }
 
 
-    // -- whitespace and comments (2.1, 2.3) ---------------------------------
+    // -- whitespace and comments --------------------------------------------
 
     fn skip_ws(&mut self) -> Result<(), Error> {
         loop {
@@ -264,6 +264,7 @@ impl<'a> Parser<'a> {
                 '+' | '-' => self.parse_number()?,
                 c if c.is_ascii_digit() => self.parse_number()?,
                 c if is_id_start(c) => {
+                    let (line, column) = (self.line, self.col);
                     let name = self.read_identifier();
                     self.skip_ws()?;
                     // The argument is taken greedily. The tokens that can
@@ -276,6 +277,16 @@ impl<'a> Parser<'a> {
                         frames.push(Frame::Tag { at: self.nodes.len() });
                         self.nodes.push(Node::Tag { name: span, end: 0 });
                         continue 'value;
+                    }
+                    // A bare symbol cannot be a tag's payload. Without this,
+                    // a missing comma between two identifiers would silently
+                    // denote one tagged value instead of being an error.
+                    if matches!(frames.last(), Some(Frame::Tag { .. })) {
+                        return self.err_at(
+                            "a tag cannot be applied to a bare symbol",
+                            line,
+                            column,
+                        );
                     }
                     let span = self.intern_from_source(name);
                     self.nodes.push(Node::Symbol(span));
@@ -440,7 +451,7 @@ impl<'a> Parser<'a> {
     }
 
 
-    // -- strings (2.5) ------------------------------------------------------
+    // -- strings ------------------------------------------------------------
 
     fn parse_string(&mut self) -> Result<Span, Error> {
         let (line, column) = (self.line, self.col);
@@ -552,7 +563,7 @@ impl<'a> Parser<'a> {
         Ok(value)
     }
 
-    // -- numbers (2.6) ------------------------------------------------------
+    // -- numbers ------------------------------------------------------------
 
     fn parse_number(&mut self) -> Result<(), Error> {
         let start = self.pos;

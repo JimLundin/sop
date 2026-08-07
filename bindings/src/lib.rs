@@ -5,23 +5,34 @@
 //! writing feeds Python objects into the core's [`sop::Builder`], so the text
 //! form -- escaping, layout, all of it -- is produced by the one writer.
 //!
-//! Value mapping:
+//! Value mapping. Reading produces immutable values only; writing also
+//! accepts their mutable counterparts:
 //!
-//!     sop object   <->  dict[str, Value]
-//!     sop array    <->  list[Value]
+//!     sop object   <->  frozendict[str, Value]   (dict is written too)
+//!     sop array    <->  tuple[Value, ...]        (list is written too)
 //!     sop string   <->  str
 //!     sop number   <->  int | float
 //!     sop symbol   <->  True | False | None | Symbol(name)
 //!     sop tagged   <->  Tagged(tag, value)
+//!
+//! Anything else -- a dataclass, an enum, a set -- is spelled by the
+//! `convert` hook the SDK passes to `dumps`: one Python call per object the
+//! bindings cannot classify, and the traversal continues in place, so the
+//! graph is walked exactly once.
 
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::OnceLock;
 
 use pyo3::create_exception;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyMapping, PyString, PyTuple};
 
 create_exception!(_core, SopError, PyValueError);
+
+/// The `builtins.frozendict` type, taken once at module import.
+static FROZENDICT: OnceLock<Py<PyAny>> = OnceLock::new();
 
 fn sop_error(message: String, line: usize, column: usize) -> PyErr {
     Python::attach(|py| {
@@ -113,7 +124,15 @@ impl Symbol {
 
 /// A tag applied to a payload. Tags are constructive: a tagged value is never
 /// equal to the value it wraps.
-#[pyclass(module = "sop._core")]
+///
+/// Frozen, like `Symbol`: the native types are immutable. Equality and
+/// hashing behave as a frozen dataclass's would — equal by `(tag, value)`,
+/// hashable exactly when the payload is.
+///
+/// The payload is never `None`, a bool or a `Symbol`: those are bare symbols
+/// on the wire, and a tag cannot be applied to a bare symbol, so such a
+/// value could never be written or read back.
+#[pyclass(frozen, module = "sop._core")]
 pub struct Tagged {
     #[pyo3(get)]
     tag: String,
@@ -124,27 +143,54 @@ pub struct Tagged {
 #[pymethods]
 impl Tagged {
     #[new]
-    fn new(tag: String, value: Py<PyAny>) -> PyResult<Self> {
+    fn new(tag: String, value: Bound<'_, PyAny>) -> PyResult<Self> {
         if !sop::is_identifier(&tag) {
             return Err(PyValueError::new_err(format!(
                 "{tag:?} is not an identifier, so it cannot be a tag"
             )));
         }
-        Ok(Tagged { tag, value })
+        let symbolish = if value.is_none() {
+            Some("None, which is spelled `null`")
+        } else if value.is_instance_of::<PyBool>() {
+            Some("a bool, which is spelled `true` or `false`")
+        } else if value.is_instance_of::<Symbol>() {
+            Some("a Symbol")
+        } else {
+            None
+        };
+        if let Some(what) = symbolish {
+            return Err(PyValueError::new_err(format!(
+                "a tag cannot be applied to a bare symbol, so Tagged cannot hold {what}"
+            )));
+        }
+        Ok(Tagged { tag, value: value.unbind() })
     }
 
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
         Ok(format!("Tagged({:?}, {})", self.tag, self.value.bind(py).repr()?))
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<bool> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         let Ok(other) = other.cast::<Tagged>() else {
-            // A tagged value is never equal to its payload, or to anything
-            // else. Beyond that, comparison is Python's business.
-            return Ok(false);
+            // A tagged value is never equal to its payload. `NotImplemented`
+            // rather than `False`, so the other operand gets its say;
+            // comparison beyond these types is Python's business.
+            return Ok(py.NotImplemented());
         };
-        let other = other.borrow();
-        Ok(self.tag == other.tag && self.value.bind(py).eq(other.value.bind(py))?)
+        let other = other.get();
+        let equal = self.tag == other.tag && self.value.bind(py).eq(other.value.bind(py))?;
+        Ok(PyBool::new(py, equal).to_owned().into_any().unbind())
+    }
+
+    /// A frozen dataclass's hash, over `(tag, value)`. Delegating to the
+    /// payload's own hash keeps the contract with `__eq__`: equal values hash
+    /// equal, and an unhashable payload makes the whole value unhashable
+    /// rather than quietly hashable by identity.
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        let mut hasher = DefaultHasher::new();
+        self.tag.hash(&mut hasher);
+        self.value.bind(py).hash()?.hash(&mut hasher);
+        Ok(hasher.finish() as isize)
     }
 
     /// Makes `copy`, `deepcopy` and `pickle` work on a native type.
@@ -195,15 +241,16 @@ fn build<'a>(
         )?
         .into_any(),
         sop::Kind::Array => {
-            let items = PyList::empty(py);
+            let mut items = Vec::with_capacity(node.len());
             for item in node.array() {
-                items.append(build(py, item, keys)?)?;
+                items.push(build(py, item, keys)?);
             }
-            items.into_any().unbind()
+            PyTuple::new(py, items)?.into_any().unbind()
         }
         sop::Kind::Object => {
             // Duplicates are accepted and the last wins, which is what
-            // assigning into a dict does, keeping the first position.
+            // assigning into a dict does, keeping the first position. The
+            // dict is scaffolding; what leaves is a frozendict.
             let map = PyDict::new(py);
             for (key, item) in node.object() {
                 let shared = match keys.get(key) {
@@ -216,7 +263,10 @@ fn build<'a>(
                 };
                 map.set_item(shared, build(py, item, keys)?)?;
             }
-            map.into_any().unbind()
+            let frozen = unsafe {
+                Bound::from_owned_ptr_or_err(py, pyo3::ffi::PyFrozenDict_New(map.as_ptr()))?
+            };
+            frozen.unbind()
         }
     })
 }
@@ -234,34 +284,36 @@ enum Kind<'py> {
     Symbol(String),
     Tagged(String, Bound<'py, PyAny>),
     Array(Bound<'py, PyList>),
+    Tuple(Bound<'py, PyTuple>),
     Object(Bound<'py, PyDict>),
+    /// A frozendict's `(key, value)` pairs, via `items()`.
+    FrozenObject(Bound<'py, PyList>),
 }
 
 /// Classify a Python object as a sop value.
 ///
 /// The builtin cases are matched on the *exact* type. A subclass may carry a
 /// tag — `class Iban(str)` is written `iban "DE89"` — and treating it as a
-/// plain string here would drop the tag silently. Anything this refuses goes
-/// to the shape layer, which knows about tags.
+/// plain string here would drop the tag silently. `Ok(None)` is a type the
+/// bindings do not know, which the SDK's `convert` hook may spell; `Err` is
+/// a value of a known type that cannot be spelled at all, which no
+/// conversion can fix.
 ///
 /// `bool` is tested before `int`: in Python `bool` subclasses `int`, so
 /// `isinstance(True, int)` holds and the wrong order would spell `true` as `1`.
-fn classify<'py>(value: &Bound<'py, PyAny>) -> PyResult<Kind<'py>> {
+fn classify<'py>(value: &Bound<'py, PyAny>) -> PyResult<Option<Kind<'py>>> {
     if value.is_none() {
-        return Ok(Kind::Null);
+        return Ok(Some(Kind::Null));
     }
     if let Ok(b) = value.cast_exact::<PyBool>() {
-        return Ok(Kind::Bool(b.is_true()));
+        return Ok(Some(Kind::Bool(b.is_true())));
     }
     if let Ok(symbol) = value.cast::<Symbol>() {
-        return Ok(Kind::Symbol(symbol.get().name.clone()));
+        return Ok(Some(Kind::Symbol(symbol.get().name.clone())));
     }
     if let Ok(tagged) = value.cast::<Tagged>() {
-        let borrowed = tagged.borrow();
-        return Ok(Kind::Tagged(
-            borrowed.tag.clone(),
-            borrowed.value.bind(value.py()).clone(),
-        ));
+        let tagged = tagged.get();
+        return Ok(Some(Kind::Tagged(tagged.tag.clone(), tagged.value.bind(value.py()).clone())));
     }
     if let Ok(s) = value.cast_exact::<PyString>() {
         // A Python `str` may hold a lone surrogate; sop text cannot, and the
@@ -270,41 +322,104 @@ fn classify<'py>(value: &Bound<'py, PyAny>) -> PyResult<Kind<'py>> {
         let text = s.to_cow().map_err(|_| {
             ser_error("string contains a lone surrogate, which sop text cannot hold".into())
         })?;
-        return Ok(Kind::Str(text.into_owned()));
+        return Ok(Some(Kind::Str(text.into_owned())));
     }
     if let Ok(i) = value.cast_exact::<PyInt>() {
-        return Ok(Kind::Int(i.clone()));
+        return Ok(Some(Kind::Int(i.clone())));
     }
     if let Ok(f) = value.cast_exact::<PyFloat>() {
-        return Ok(Kind::Float(f.value()));
+        return Ok(Some(Kind::Float(f.value())));
     }
     if let Ok(items) = value.cast_exact::<PyList>() {
-        return Ok(Kind::Array(items.clone()));
-    }
-    if let Ok(map) = value.cast_exact::<PyDict>() {
-        return Ok(Kind::Object(map.clone()));
+        return Ok(Some(Kind::Array(items.clone())));
     }
     if let Ok(items) = value.cast_exact::<PyTuple>() {
-        return Ok(Kind::Array(PyList::new(value.py(), items.iter())?));
+        return Ok(Some(Kind::Tuple(items.clone())));
     }
-    Err(ser_error(format!("not a sop value: {}", value.repr()?)))
+    if let Ok(map) = value.cast_exact::<PyDict>() {
+        return Ok(Some(Kind::Object(map.clone())));
+    }
+    if let Some(t) = FROZENDICT.get()
+        && value.get_type().as_ptr() == t.as_ptr()
+    {
+        let items = value.cast::<PyMapping>()?.items()?;
+        return Ok(Some(Kind::FrozenObject(items)));
+    }
+    Ok(None)
+}
+
+/// An object key on the tape. Exact `str` only: under the protocol a str
+/// subclass carries a tag, and a key has nowhere to put one, so accepting it
+/// here would drop the tag silently.
+fn write_key(doc: &mut sop::Builder, key: &Bound<'_, PyAny>) -> PyResult<()> {
+    match key.cast_exact::<PyString>() {
+        Ok(key) => {
+            let key = key
+                .to_cow()
+                .map_err(|_| ser_error("object key contains a lone surrogate".to_string()))?;
+            doc.key(&key);
+            Ok(())
+        }
+        Err(_) if key.is_instance_of::<PyString>() => Err(ser_error(
+            "a subclass of str carries a tag, which an object key cannot hold".to_string(),
+        )),
+        Err(_) => Err(ser_error("object keys must be strings".to_string())),
+    }
+}
+
+fn refuse_tagged_symbol(under_tag: bool, name: &str) -> PyResult<()> {
+    if under_tag {
+        return Err(ser_error(format!("a tag cannot be applied to a bare symbol (`{name}`)")));
+    }
+    Ok(())
 }
 
 /// Feed a Python value into the core's builder; the text is then the core
 /// writer's business.
-fn emit(value: &Bound<'_, PyAny>, doc: &mut sop::Builder) -> PyResult<()> {
+///
+/// `convert` spells one unclassifiable object as a plain value -- its head
+/// only, children untouched -- and `may_convert` is false exactly when the
+/// value at hand *is* a hook result, so a hook that returns another unknown
+/// is an error rather than a loop. `under_tag` is true for a tag's payload,
+/// where a bare symbol has no legal spelling.
+fn emit(
+    value: &Bound<'_, PyAny>,
+    doc: &mut sop::Builder,
+    convert: Option<&Bound<'_, PyAny>>,
+    under_tag: bool,
+    may_convert: bool,
+) -> PyResult<()> {
     // A Python value can nest arbitrarily, or cyclically, and overflowing the
     // stack here is an abort the caller cannot catch. Borrowing CPython's own
     // recursion guard -- as the stdlib json encoder does -- turns that into a
     // RecursionError at the interpreter's limit, with no limit of our own.
     let _guard = Recursion::enter(value.py(), c" while writing sop")?;
-    match classify(value)? {
-        Kind::Null => doc.symbol("null"),
-        Kind::Bool(true) => doc.symbol("true"),
-        Kind::Bool(false) => doc.symbol("false"),
+    let kind = match classify(value)? {
+        Some(kind) => kind,
+        None => {
+            let Some(hook) = convert.filter(|_| may_convert) else {
+                return Err(ser_error(format!("not a sop value: {}", value.repr()?)));
+            };
+            let converted = hook.call1((value,))?;
+            return emit(&converted, doc, convert, under_tag, false);
+        }
+    };
+    match kind {
+        Kind::Null => {
+            refuse_tagged_symbol(under_tag, "null")?;
+            doc.symbol("null");
+        }
+        Kind::Bool(b) => {
+            let name = if b { "true" } else { "false" };
+            refuse_tagged_symbol(under_tag, name)?;
+            doc.symbol(name);
+        }
         // Symbol and Tagged validate their names on construction, so the
         // builder cannot be handed one that does not round-trip.
-        Kind::Symbol(name) => doc.symbol(&name),
+        Kind::Symbol(name) => {
+            refuse_tagged_symbol(under_tag, &name)?;
+            doc.symbol(&name);
+        }
         Kind::Str(s) => doc.string(&s),
         // Python integers are unbounded; the core's numeric domain is i64 or
         // f64. A larger one would not read back to an equal value, so it is
@@ -324,27 +439,36 @@ fn emit(value: &Bound<'_, PyAny>, doc: &mut sop::Builder) -> PyResult<()> {
         Kind::Float(f) => return Err(ser_error(format!("{f} has no sop representation"))),
         Kind::Tagged(tag, payload) => {
             doc.tag(&tag);
-            emit(&payload, doc)?;
+            emit(&payload, doc, convert, true, true)?;
         }
         Kind::Array(items) => {
             doc.begin_array();
             for item in items.iter() {
-                emit(&item, doc)?;
+                emit(&item, doc, convert, false, true)?;
+            }
+            doc.end_array();
+        }
+        Kind::Tuple(items) => {
+            doc.begin_array();
+            for item in items.iter() {
+                emit(&item, doc, convert, false, true)?;
             }
             doc.end_array();
         }
         Kind::Object(map) => {
             doc.begin_object();
             for (key, item) in map.iter() {
-                let key = key
-                    .cast::<PyString>()
-                    .map_err(|_| ser_error("object keys must be strings".to_string()))?
-                    .to_cow()
-                    .map_err(|_| {
-                        ser_error("object key contains a lone surrogate".to_string())
-                    })?;
-                doc.key(&key);
-                emit(&item, doc)?;
+                write_key(doc, &key)?;
+                emit(&item, doc, convert, false, true)?;
+            }
+            doc.end_object();
+        }
+        Kind::FrozenObject(items) => {
+            doc.begin_object();
+            for pair in items.iter() {
+                let (key, item) = pair.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()?;
+                write_key(doc, &key)?;
+                emit(&item, doc, convert, false, true)?;
             }
             doc.end_object();
         }
@@ -363,10 +487,14 @@ fn loads(py: Python<'_>, text: &str) -> PyResult<Py<PyAny>> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (value, indent = None))]
-fn dumps(value: &Bound<'_, PyAny>, indent: Option<usize>) -> PyResult<String> {
+#[pyo3(signature = (value, indent = None, convert = None))]
+fn dumps(
+    value: &Bound<'_, PyAny>,
+    indent: Option<usize>,
+    convert: Option<&Bound<'_, PyAny>>,
+) -> PyResult<String> {
     let mut doc = sop::Builder::new();
-    emit(value, &mut doc)?;
+    emit(value, &mut doc, convert, false, true)?;
     let document = doc.finish();
     Ok(match indent.unwrap_or(0) {
         0 => document.to_string(),
@@ -376,6 +504,8 @@ fn dumps(value: &Bound<'_, PyAny>, indent: Option<usize>) -> PyResult<String> {
 
 #[pymodule]
 fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    let frozendict = module.py().import("builtins")?.getattr("frozendict")?;
+    let _ = FROZENDICT.set(frozendict.unbind());
     module.add("SopError", module.py().get_type::<SopError>())?;
     module.add_class::<Symbol>()?;
     module.add_class::<Tagged>()?;

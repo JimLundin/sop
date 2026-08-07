@@ -12,10 +12,11 @@ Reading takes a shape because text carries no type; writing does not, because
 the object does.  There is no shapeless `loads`: `loads[Any]` is the escape
 hatch and it has to be written down.
 
-`loads[Any]` gives:
+Untyped reading produces immutable values only; writing also accepts their
+mutable counterparts:
 
-    sop object   <->  dict[str, Any]    insertion ordered, equality unordered
-    sop array    <->  list[Any]
+    sop object   <->  frozendict[str, Value]   (dict is written too)
+    sop array    <->  tuple[Value, ...]        (list is written too)
     sop string   <->  str
     sop number   <->  int | float
     sop symbol   <->  True | False | None | Symbol(name)
@@ -41,7 +42,16 @@ from ._core import SopError, Symbol, Tagged
 from ._core import dumps as _dumps, loads as _loads
 from ._shape import ShapeError
 
-__all__ = ["ShapeError", "SopError", "Symbol", "Tagged", "dumps", "loads"]
+__all__ = ["ShapeError", "SopError", "Symbol", "Tagged", "Value", "dumps", "loads"]
+
+type Value = (
+    None | bool | int | float | str | Symbol | Tagged | tuple[Value, ...] | frozendict[str, Value]
+)
+"""The closed set untyped reading produces — immutable throughout.  Mutation
+is opt-in: a shape such as `list[T]` or `dict[str, V]` declares it, and the
+decoded result is freshly built.  `loads[Value]` is the escape hatch with its
+result typed precisely; `loads[Any]` reads the same way and types the result
+as `Any`.  Kept in step with the alias in `_core.pyi`."""
 
 
 class _TypedLoads[T]:
@@ -77,13 +87,11 @@ def dumps(value: Any, indent: int | None = None) -> str:
     """Write a value as sop text.
 
     The core writer already understands every sop value, so a value that came
-    from `loads` is written without a Python-level traversal.  Anything it
-    rejects -- a dataclass, an enum, a tagged scalar -- is converted first.
+    from `loads` is written without touching Python.  Anything else -- a
+    dataclass, an enum, a set -- is spelled by the shape layer's `convert`,
+    one call per unrecognised object, inside the same single traversal.
     """
-    try:
-        return _dumps(value, indent)
-    except SopError:
-        return _dumps(_shape.encode(value), indent)
+    return _dumps(value, indent, _shape.convert)
 
 
 loads = _Loads()

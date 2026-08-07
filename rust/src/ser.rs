@@ -30,20 +30,15 @@ fn escape_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// Append the spelling of a float. `false` if it has no spelling, which the
-/// tape cannot hold: the parser rejects literals that overflow to infinity
-/// and the builder refuses a non-finite float.
+/// Append the spelling of a float, always with a point or an exponent:
+/// number kind is spelling-determined, so a float never reads back as an
+/// integer, and `-0.0` keeps its sign. `false` if the value has no spelling,
+/// which the tape cannot hold: the parser rejects literals that overflow to
+/// infinity and the builder refuses a non-finite float.
 fn write_f64(f: f64, out: &mut String) -> bool {
     if !f.is_finite() {
         return false;
     }
-    if f.fract() == 0.0 && f.abs() < 9007199254740992.0 {
-        let _ = write!(out, "{}", f as i64);
-        return true;
-    }
-    // Beyond 2^53 an integral float prints as a run of digits, and that
-    // spelling reads back as an *integer*. Keep the point so the value
-    // returns as the same kind.
     let start = out.len();
     let _ = write!(out, "{f}");
     if !out[start..].contains(['.', 'e', 'E']) {

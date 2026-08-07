@@ -1,5 +1,5 @@
-//! Section 5 as a fuzz target: every JSON text must be a valid sop document
-//! denoting the same value.
+//! The JSON-superset guarantee as a fuzz target: every JSON text must be a
+//! valid sop document denoting the same value.
 //!
 //! `serde_json` is the oracle. If it accepts an input and sop rejects it, the
 //! superset claim is broken. If both accept, the values must agree.
@@ -32,7 +32,7 @@ fn agrees(j: &serde_json::Value, s: sop::Ref<'_>) -> bool {
         }
         (J::Object(a), sop::Kind::Object) => {
             // serde_json drops earlier duplicates; sop keeps them on the tape
-            // and resolves on the way out (4.4), so compare on lookup.
+            // and resolves on the way out, so compare on lookup.
             a.iter().all(|(k, v)| s.get(k).map(|w| agrees(v, w)).unwrap_or(false))
         }
         _ => false,
@@ -44,18 +44,17 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(src) else {
-        return; // not JSON; section 5 says nothing about it
+        return; // not JSON; the superset guarantee says nothing about it
     };
 
-    // Section 5 has exactly one permitted exception, and the target asserts
-    // that it is the only one: a literal outside the binary64 range. RFC 8259
-    // section 6 allows a JSON parser to set limits on range and precision, so
-    // this stays inside the JSON spec even though it leaves sop's section 2.6
-    // ("no restriction is placed on range or precision") behind.
+    // The guarantee has exactly one permitted exception, and the target
+    // asserts that it is the only one: a numeric literal outside the binary64
+    // range. RFC 8259 section 6 allows a JSON parser to set limits on range
+    // and precision, so rejecting such a literal stays inside the JSON spec.
     let doc = match sop::Document::parse(src) {
         Ok(d) => d,
         Err(e) if e.message.contains("out of range") => return,
-        Err(e) => panic!("section 5 violated: serde_json accepted {src:?}, sop said {e}"),
+        Err(e) => panic!("superset violated: serde_json accepted {src:?}, sop said {e}"),
     };
     assert!(agrees(&json, doc.root()), "value mismatch on {src:?}");
 });

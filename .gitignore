@@ -1,5 +1,7 @@
 target/
 _core.so
+rust/fuzz/corpus/
+rust/fuzz/artifacts/
 __pycache__/
 .hypothesis/
 .pytest_cache/

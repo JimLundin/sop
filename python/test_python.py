@@ -7,6 +7,8 @@ where Python's own semantics need guarding against.
 """
 
 import copy
+import enum
+import math
 import pickle
 import re
 from dataclasses import dataclass
@@ -39,6 +41,17 @@ def test_any_other_symbol_stays_a_symbol():
     assert sop.loads[Any]("Active") == sop.Symbol("Active")
 
 
+def test_untyped_reading_produces_immutable_values():
+    # The whole untyped result is immutable; mutation is something a shape
+    # such as `list[T]` or `dict[str, V]` has to declare.
+    value = sop.loads[Any]("{a: [1, 2], b: {c: 3}}")
+    assert isinstance(value, frozendict)
+    assert isinstance(value["a"], tuple)
+    assert isinstance(value["b"], frozendict)
+    with pytest.raises(TypeError):
+        value["d"] = 4  # type: ignore[index]
+
+
 def test_bool_is_not_written_as_a_number():
     # bool subclasses int in Python, so the writer has to test it first.
     assert sop.dumps(True) == "true"
@@ -69,6 +82,23 @@ def test_tagged_requires_an_identifier_tag(tag):
         sop.Tagged(tag, 1)
 
 
+@pytest.mark.parametrize("payload", [None, True, False])
+def test_tagged_refuses_what_spells_as_a_symbol(payload):
+    # A tag cannot be applied to a bare symbol, so such a value could never
+    # be written or read back; it is refused at construction.
+    with pytest.raises(ValueError, match="bare symbol"):
+        sop.Tagged("t", payload)
+    with pytest.raises(ValueError, match="bare symbol"):
+        sop.Tagged("t", sop.Symbol("x"))
+
+
+def test_a_missing_comma_is_an_error_not_a_tag():
+    # `[Red Green]` used to denote one doubly-named value; a bare symbol
+    # cannot be a tag's payload, so the typo is caught where it happens.
+    with pytest.raises(sop.SopError, match="bare symbol"):
+        sop.loads[Any]("[Red Green]")
+
+
 def test_unicode_identifiers_are_fine():
     assert sop.Symbol("été").name == "été"
     assert sop.dumps({"été": sop.Symbol("café")}) == "{été:café}"
@@ -90,9 +120,38 @@ def test_a_tagged_value_is_not_its_payload():
     assert sop.Tagged("a", 1) == sop.Tagged("a", 1)
 
 
+def test_tagged_equality_defers_to_the_other_operand():
+    # For anything that is not a Tagged, __eq__ answers NotImplemented rather
+    # than False, so Python asks the other side before settling the question.
+    class Agreeable:
+        def __eq__(self, other: object) -> bool:
+            return True
+
+    assert sop.Tagged("a", 1) == Agreeable()
+    assert Agreeable() == sop.Tagged("a", 1)
+
+
 def test_symbols_are_hashable_and_usable_as_keys():
     assert {sop.Symbol("a"): 1}[sop.Symbol("a")] == 1
     assert len({sop.Symbol("a"), sop.Symbol("a")}) == 1
+
+
+def test_tagged_hashes_like_a_frozen_dataclass():
+    # Equal values must hash equal, or sets and dicts misbehave.
+    assert hash(sop.Tagged("a", 1)) == hash(sop.Tagged("a", 1))
+    assert len({sop.Tagged("a", 1), sop.Tagged("a", 1)}) == 1
+    assert {sop.Tagged("a", 1): "x"}[sop.Tagged("a", 1)] == "x"
+    # An unhashable payload makes the whole value unhashable, as a frozen
+    # dataclass's field would.
+    with pytest.raises(TypeError):
+        hash(sop.Tagged("a", [1]))
+
+
+def test_native_values_are_immutable():
+    with pytest.raises(AttributeError):
+        sop.Symbol("x").name = "y"  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        sop.Tagged("a", 1).value = 2  # type: ignore[misc]
 
 
 @pytest.mark.parametrize(
@@ -127,12 +186,27 @@ def test_shape_errors_carry_a_path():
     with pytest.raises(sop.ShapeError) as caught:
         sop.loads[dict[str, int]]("{a: Active}")
     assert caught.value.path == "$.a"
+    # No position -- the document parsed -- but the attributes every SopError
+    # promises are present.
+    assert (caught.value.line, caught.value.column) == (0, 0)
 
 
 def test_loads_needs_a_shape():
     # `loads[Any]` is the escape hatch and it has to be written down.
     with pytest.raises(TypeError):
         sop.loads("1")  # type: ignore[operator]
+
+
+def test_value_names_the_untyped_result():
+    # `Value` is the closed set untyped reading produces, so reading through
+    # it changes nothing about the result.
+    text = '{a: [1, "x", Active], b: uuid "9f1c", c: null, d: [true, 1.5], e: set [2]}'
+    assert sop.loads[sop.Value](text) == sop.loads[Any](text)
+
+
+def test_a_type_alias_is_its_right_hand_side():
+    type Port = int
+    assert sop.loads[Port]("8080") == 8080
 
 
 def test_unencodable_object():
@@ -159,8 +233,15 @@ def test_duplicate_keys_take_the_last_value_in_the_first_position():
 def test_object_keys_must_be_strings():
     # Not coerced with str(): `{1: "a"}` and `{"1": "a"}` are different Python
     # values and quietly conflating them is the SDK inventing a mapping.
-    with pytest.raises(sop.ShapeError, match="keys must be strings"):
+    with pytest.raises(sop.SopError, match="keys must be strings"):
         sop.dumps({1: "a"})
+
+
+def test_a_tagged_string_cannot_be_an_object_key():
+    # A key has nowhere to carry a tag, and writing the bare string would
+    # drop it silently.
+    with pytest.raises(sop.SopError, match="an object key cannot hold"):
+        sop.dumps({Iban("DE89"): 1})
 
 
 # ---------------------------------------------------------------------------
@@ -191,16 +272,19 @@ def test_non_finite_floats_have_no_spelling():
             sop.dumps(value)
 
 
-def test_a_large_float_stays_a_float():
-    # Beyond 2^53 an integral float prints as a run of digits, which would read
-    # back as an int; the writer keeps the point.
+def test_a_float_keeps_its_kind():
+    # Number kind is spelling-determined: digits alone denote an integer, so
+    # a float always keeps a point or an exponent.
+    assert sop.dumps(2.0) == "2.0"
+    assert isinstance(sop.loads[Any]("2.0"), float)
     assert sop.dumps(1e16) == "10000000000000000.0"
     assert isinstance(sop.loads[Any](sop.dumps(1e16)), float)
+    assert sop.loads[float]("2") == 2.0  # an integer literal is still a number
 
 
-def test_a_float_that_is_a_whole_number_is_written_plainly():
-    assert sop.dumps(2.0) == "2"
-    assert sop.loads[float]("2") == 2.0
+def test_negative_zero_keeps_its_sign():
+    assert sop.dumps(-0.0) == "-0.0"
+    assert math.copysign(1, sop.loads[Any]("-0.0")) == -1.0
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +305,7 @@ def test_depth_is_bounded_by_the_interpreter_not_the_sdk():
 
 
 # ---------------------------------------------------------------------------
-# Writing: the fast path and the fallback must agree
+# Writing: one traversal; the shape layer converts unknown objects in place
 # ---------------------------------------------------------------------------
 
 
@@ -240,14 +324,24 @@ def test_plain_values_take_the_fast_path():
     assert sop.dumps(value) == '{a:[1,"x",Active],b:uuid "9f1c"}'
 
 
-def test_a_typed_object_falls_back_to_the_shape_layer():
+def test_a_typed_object_is_converted():
     assert sop.dumps(Point(1)) == "{x:1}"
 
 
-def test_a_mixed_graph_falls_back_correctly():
-    # The fast path gets part-way through and fails; the retry must produce the
-    # whole document, not a fragment.
+def test_a_mixed_graph_converts_in_place():
+    # The traversal happens once; the convert hook spells each unknown object
+    # where it is met, and the plain values around it never touch Python.
     assert sop.dumps({"a": 1, "b": Point(2), "c": [3]}) == "{a:1,b:{x:2},c:[3]}"
+
+
+def test_a_tag_cannot_wrap_a_value_that_spells_as_a_symbol():
+    # Tagged(t, enum_member) is constructible -- the payload is an object --
+    # but the member spells as a symbol, which a tag cannot apply to.
+    class Status(enum.Enum):
+        Up = "up"
+
+    with pytest.raises(sop.SopError, match="bare symbol"):
+        sop.dumps(sop.Tagged("t", Status.Up))
 
 
 def test_a_tagged_subclass_of_a_builtin_keeps_its_tag():
@@ -260,7 +354,7 @@ def test_a_tagged_subclass_of_a_builtin_keeps_its_tag():
 
 def test_indent():
     assert sop.dumps({"a": 1}, indent=2) == "{\n  a: 1\n}"
-    assert sop.loads[Any](sop.dumps({"a": [1, 2]}, indent=2)) == {"a": [1, 2]}
+    assert sop.loads[Any](sop.dumps({"a": [1, 2]}, indent=2)) == {"a": (1, 2)}
 
 
 def test_a_runaway_value_is_an_error_not_a_crash():
