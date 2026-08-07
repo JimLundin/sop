@@ -1,10 +1,6 @@
-"""Type stubs for the Rust core extension module.
-
-Richer than `maturin generate-stubs -F stubs` can currently emit — the
-recursive `Value` alias and the typed `convert` callable are beyond the
-introspection output — so this file is kept by hand and reviewed against the
-generator's output on each PyO3 upgrade.
-"""
+"""Type stubs for the Rust core extension module, kept by hand: the recursive
+`Value` alias and the typed `convert` callable are beyond what stub
+generation could emit."""
 
 from collections.abc import Callable
 from typing import Any, final
@@ -34,6 +30,4 @@ class Tagged:
     def __hash__(self) -> int: ...
 
 def loads(text: str) -> Value: ...
-def dumps(
-    value: Any, indent: int | None = ..., convert: Callable[[Any], Any] | None = ...
-) -> str: ...
+def dumps(value: Any, convert: Callable[[Any], Any]) -> str: ...

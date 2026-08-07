@@ -575,7 +575,7 @@ def test_a_validating_dataclass_reports_a_shape_error():
 
     with pytest.raises(sop.ShapeError, match="not a valid Positive") as caught:
         sop.loads[list[Positive]]("[{n: -1}]")
-    assert caught.value.path == "$[0]"
+    assert str(caught.value).startswith("$[0]: ")
 
 
 def test_field_names_are_written_with_their_alias():
@@ -600,7 +600,7 @@ def test_field_names_are_written_with_their_alias():
 def test_error_paths(shape, text, path):
     with pytest.raises(sop.ShapeError) as caught:
         sop.loads[shape](text)
-    assert caught.value.path == path
+    assert str(caught.value).startswith(f"{path}: ")
 
 
 # ---------------------------------------------------------------------------

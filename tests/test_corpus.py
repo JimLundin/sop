@@ -1,13 +1,15 @@
-#!/usr/bin/env python3
-"""Builds corpus.json, the shared test corpus for both implementations.
+"""The conformance corpus: every construct the format has, as an input and
+either its exact compact serialisation or the fact that it is rejected.
 
-Written as a generator rather than by hand so that the escaping in the source
-strings stays readable.  Expected outputs are written out by hand; neither
-implementation is used to produce them.
+The expected outputs are written by hand; the implementation is never used to
+produce them.
 """
 
-import json
-import pathlib
+from typing import Any
+
+import pytest
+
+import sop
 
 TYPED_RESPONSE = """{
   id: uuid "9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234",
@@ -94,8 +96,6 @@ VALID = [
     ("fraction", "[0.5,1.25]", "[0.5,1.25]"),
     ("tenth", "[0.1]", "[0.1]"),
     ("beyond_double_precision", "[9007199254740993]", "[9007199254740993]"),
-    # These used to sit in a "divergent" section because the two
-    # implementations spelled them differently. There is one implementation now.
     ("big_integer", "123456789012345678901234567890", "123456789012345680000000000000.0"),
     ("beyond_i64", "9223372036854775808", "9223372036854776000.0"),
     ("large_float", "[1e30]", "[1000000000000000000000000000000.0]"),
@@ -174,11 +174,15 @@ INVALID = [
     ("error_on_line_three", "[\n  1,\n  2 3\n]"),
 ]
 
-corpus = {
-    "valid": [{"name": n, "src": s, "out": o} for n, s, o in VALID],
-    "invalid": [{"name": n, "src": s} for n, s in INVALID],
-}
 
-path = pathlib.Path(__file__).parent / "corpus.json"
-path.write_text(json.dumps(corpus, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-print(f"{path}: {len(VALID)} valid, {len(INVALID)} invalid")
+@pytest.mark.parametrize("src, expected", [c[1:] for c in VALID], ids=[c[0] for c in VALID])
+def test_valid(src, expected):
+    value = sop.loads[Any](src)
+    assert sop.dumps(value) == expected
+    assert sop.loads[Any](expected) == value
+
+
+@pytest.mark.parametrize("src", [c[1] for c in INVALID], ids=[c[0] for c in INVALID])
+def test_invalid(src):
+    with pytest.raises(sop.SopError):
+        sop.loads[Any](src)

@@ -35,7 +35,7 @@ The format itself is implemented once, in Rust (`sop._core`).  There is no
 pure-Python parser and no fallback.
 """
 
-from typing import Any, TypeForm
+from typing import Any as _Any, TypeForm as _TypeForm
 
 from . import _shape
 from ._core import SopError, Symbol, Tagged
@@ -76,14 +76,14 @@ class _TypedLoads[T]:
 class _Loads:
     __slots__ = ()
 
-    def __getitem__[T](self, shape: TypeForm[T]) -> _TypedLoads[T]:
+    def __getitem__[T](self, shape: _TypeForm[T]) -> _TypedLoads[T]:
         return _TypedLoads(shape)
 
     def __repr__(self) -> str:
         return "sop.loads"
 
 
-def dumps(value: Any, indent: int | None = None) -> str:
+def dumps(value: _Any) -> str:
     """Write a value as sop text.
 
     The core writer already understands every sop value, so a value that came
@@ -91,7 +91,7 @@ def dumps(value: Any, indent: int | None = None) -> str:
     dataclass, an enum, a set -- is spelled by the shape layer's `convert`,
     one call per unrecognised object, inside the same single traversal.
     """
-    return _dumps(value, indent, _shape.convert)
+    return _dumps(value, _shape.convert)
 
 
 loads = _Loads()

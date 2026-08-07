@@ -87,7 +87,7 @@ impl Drop for Recursion {
 /// which is why this is a distinct type and not a `str` subclass.
 #[pyclass(frozen, eq, hash, skip_from_py_object, module = "sop._core")]
 #[derive(PartialEq, Eq, Hash, Clone)]
-pub struct Symbol {
+pub(crate) struct Symbol {
     #[pyo3(get)]
     pub(crate) name: String,
 }
@@ -114,15 +114,6 @@ impl Symbol {
     fn __repr__(&self) -> String {
         format!("Symbol({:?})", self.name)
     }
-
-    fn __str__(&self) -> &str {
-        &self.name
-    }
-
-    /// Makes `copy`, `deepcopy` and `pickle` work on a native type.
-    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, (String,))> {
-        Ok((py.get_type::<Symbol>().into_any().unbind(), (self.name.clone(),)))
-    }
 }
 
 /// A tag applied to a payload. Tags are constructive: a tagged value is never
@@ -136,7 +127,7 @@ impl Symbol {
 /// on the wire, and a tag cannot be applied to a bare symbol, so such a
 /// value could never be written or read back.
 #[pyclass(frozen, module = "sop._core")]
-pub struct Tagged {
+pub(crate) struct Tagged {
     #[pyo3(get)]
     pub(crate) tag: String,
     #[pyo3(get)]
@@ -195,14 +186,6 @@ impl Tagged {
         self.value.bind(py).hash()?.hash(&mut hasher);
         Ok(hasher.finish() as isize)
     }
-
-    /// Makes `copy`, `deepcopy` and `pickle` work on a native type.
-    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, (String, Py<PyAny>))> {
-        Ok((
-            py.get_type::<Tagged>().into_any().unbind(),
-            (self.tag.clone(), self.value.clone_ref(py)),
-        ))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -217,19 +200,13 @@ fn loads(py: Python<'_>, text: &str) -> PyResult<Py<PyAny>> {
     parse::Parser::new(py, text).parse_document()
 }
 
-/// Write a value as sop text. `indent` selects the pretty writer; `convert`
-/// is called once per object the writer cannot classify and must return a
-/// sop value to spell in its place. Raises `SopError` for a value with no
-/// sop representation.
+/// Write a value as sop text. `convert` is called once per object the
+/// writer cannot classify and must return a sop value to spell in its place.
+/// Raises `SopError` for a value with no sop representation.
 #[pyfunction]
-#[pyo3(signature = (value, indent = None, convert = None))]
-fn dumps(
-    value: &Bound<'_, PyAny>,
-    indent: Option<usize>,
-    convert: Option<&Bound<'_, PyAny>>,
-) -> PyResult<String> {
+fn dumps(value: &Bound<'_, PyAny>, convert: &Bound<'_, PyAny>) -> PyResult<String> {
     let mut out = String::new();
-    write::emit(value, &mut out, indent.unwrap_or(0), 0, convert, false, true)?;
+    write::emit(value, &mut out, convert, false, true)?;
     Ok(out)
 }
 

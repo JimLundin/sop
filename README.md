@@ -6,18 +6,18 @@ reads and writes, and a Python shape layer on top.
 There is no separate specification. **The format is what this implementation
 accepts**, and the tests are where that is written down:
 
-- `corpus.json` — 85 conformance cases, each an input and either its exact
-  serialised output or the fact that it is rejected, enforced by
-  `tests/run_corpus.py`. The expected outputs are written by hand; the
-  implementation is never used to produce them.
+- `tests/test_corpus.py` — 85 conformance cases, each an input and either its
+  exact serialised output or the fact that it is rejected. The expected
+  outputs are written by hand; the implementation is never used to produce
+  them.
 - `tests/test_shapes.py` — how Python types map onto sop values, in both
   directions, including every rejection.
 - `tests/test_python.py` — the semantics that exist only on the Python side.
 - `tests/test_properties.py` — Hypothesis properties: round trips, robustness
   against arbitrary input, typed round trips per shape.
 
-A quick tour of the syntax is in `corpus.json`'s valid cases; every construct
-the format has appears there with its canonical spelling.
+A quick tour of the syntax is in `tests/test_corpus.py`'s valid cases; every
+construct the format has appears there with its canonical spelling.
 
 ## The implementation
 
@@ -159,9 +159,7 @@ the cost dominated by the Python objects it has to build.
 ```
 Cargo.toml           one crate, whose cdylib is the extension module
 pyproject.toml       the Python package, built by maturin
-build.sh             builds the extension into the active venv (maturin develop)
-build_corpus.py      generates corpus.json
-corpus.json          85 conformance cases
+.cargo/config.toml   defaults PYO3_PYTHON to python3.15
 
 src/lib.rs           the module: Symbol, Tagged, SopError, loads, dumps
 src/parse.rs         reading text into Python objects, one pass
@@ -170,10 +168,10 @@ src/text.rs          shared lexical facts: identifiers, escapes, number spelling
 
 python/sop/__init__.py the public API: loads and dumps
 python/sop/_shape.py  how Python types map onto sop values
-python/sop/_core.pyi  type stubs for the extension
+python/sop/_core.pyi  type stubs for the extension, kept by hand
 python/sop/py.typed   PEP 561 marker, so checkers read the stubs
 
-tests/run_corpus.py   the conformance runner
+tests/test_corpus.py      the 85 conformance cases
 tests/test_shapes.py      the shape language, both directions, and its errors
 tests/test_python.py      Python semantics: host types, native types, equality,
                           numeric limits, the single-traversal write path
@@ -185,11 +183,9 @@ tests/test_properties.py  Hypothesis property tests: round trips, robustness,
 
 ```sh
 uv venv --python 3.15 && . .venv/bin/activate  # needs Rust and Python 3.15
-./build.sh                                     # maturin develop --release
+maturin develop --release                      # build into the active venv
 uv pip install .                               # or: the wheel, via maturin build
 pytest                                         # against the installed build
-python3 tests/run_corpus.py                    # the 85 conformance cases
-maturin generate-stubs --out stubs -F stubs    # regenerate, diff against _core.pyi
 python3.15 -m mypy --python-version 3.15 python/sop
 python3.15 -m coverage run --branch --source=sop -m pytest && python3.15 -m coverage report
 ```

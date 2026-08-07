@@ -7,7 +7,7 @@ rust-version = "1.85"
 
 [lib]
 name = "_core"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.29.1", features = [] }
@@ -18,5 +18,3 @@ default = []
 # Enabled only by maturin (see pyproject.toml); with it always on, plain
 # `cargo check` and `cargo test` fail to link against libpython.
 extension-module = ["pyo3/extension-module"]
-# Embeds introspection metadata for `maturin generate-stubs -F stubs`.
-stubs = ["pyo3/experimental-inspect"]

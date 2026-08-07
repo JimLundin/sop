@@ -1,8 +1,8 @@
 //! Writing Python values out as sop text.
 //!
 //! One traversal and one writer: `emit` walks the value and spells it
-//! directly, so escaping, number spelling and layout live here and nowhere
-//! else. The `convert` hook the SDK passes to `dumps` spells one
+//! directly, so escaping and number spelling live here and nowhere else.
+//! The `convert` hook the SDK passes to `dumps` spells one
 //! unclassifiable object as a plain value — its head only, children
 //! untouched — inside the same traversal, so the graph is walked exactly
 //! once.
@@ -12,7 +12,7 @@ use std::fmt::Write as _;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyMapping, PyString, PyTuple};
 
-use crate::text::{escape_string, is_identifier, pad, write_f64};
+use crate::text::{escape_string, is_identifier, write_f64};
 use crate::{FROZENDICT, Recursion, Symbol, Tagged, ser_error};
 
 enum Classified<'py> {
@@ -122,26 +122,20 @@ fn refuse_tagged_symbol(under_tag: bool, name: &str) -> PyResult<()> {
     Ok(())
 }
 
-/// One `key: value` member, `emit`ted one level in.
+/// One `key: value` member.
 fn write_member(
     out: &mut String,
     key: &Bound<'_, PyAny>,
     item: &Bound<'_, PyAny>,
-    indent: usize,
-    level: usize,
-    convert: Option<&Bound<'_, PyAny>>,
+    convert: &Bound<'_, PyAny>,
     first: bool,
 ) -> PyResult<()> {
     if !first {
         out.push(',');
     }
-    pad(out, indent, level + 1);
     write_key(out, key)?;
     out.push(':');
-    if indent > 0 {
-        out.push(' ');
-    }
-    emit(item, out, indent, level + 1, convert, false, true)
+    emit(item, out, convert, false, true)
 }
 
 /// Spell a Python value into `out`.
@@ -150,14 +144,11 @@ fn write_member(
 /// `may_convert` is false exactly when the value at hand *is* a hook result,
 /// so a hook that returns another unknown is an error rather than a loop.
 /// `under_tag` is true for a tag's payload, where a bare symbol has no legal
-/// spelling. `level` is how many containers are open, which is all the
-/// pretty printer needs.
+/// spelling.
 pub(crate) fn emit(
     value: &Bound<'_, PyAny>,
     out: &mut String,
-    indent: usize,
-    level: usize,
-    convert: Option<&Bound<'_, PyAny>>,
+    convert: &Bound<'_, PyAny>,
     under_tag: bool,
     may_convert: bool,
 ) -> PyResult<()> {
@@ -169,11 +160,11 @@ pub(crate) fn emit(
     let kind = match classify(value)? {
         Some(kind) => kind,
         None => {
-            let Some(hook) = convert.filter(|_| may_convert) else {
+            if !may_convert {
                 return Err(ser_error(format!("not a sop value: {}", value.repr()?)));
-            };
-            let converted = hook.call1((value,))?;
-            return emit(&converted, out, indent, level, convert, under_tag, false);
+            }
+            let converted = convert.call1((value,))?;
+            return emit(&converted, out, convert, under_tag, false);
         }
     };
     match kind {
@@ -214,51 +205,41 @@ pub(crate) fn emit(
         Classified::Tagged(tag, payload) => {
             out.push_str(&tag);
             out.push(' ');
-            emit(&payload, out, indent, level, convert, true, true)?;
+            emit(&payload, out, convert, true, true)?;
         }
-        Classified::Array(items) if items.is_empty() => out.push_str("[]"),
         Classified::Array(items) => {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
-                pad(out, indent, level + 1);
-                emit(&item, out, indent, level + 1, convert, false, true)?;
+                emit(&item, out, convert, false, true)?;
             }
-            pad(out, indent, level);
             out.push(']');
         }
-        Classified::Tuple(items) if items.is_empty() => out.push_str("[]"),
         Classified::Tuple(items) => {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
-                pad(out, indent, level + 1);
-                emit(&item, out, indent, level + 1, convert, false, true)?;
+                emit(&item, out, convert, false, true)?;
             }
-            pad(out, indent, level);
             out.push(']');
         }
-        Classified::Object(map) if map.is_empty() => out.push_str("{}"),
         Classified::Object(map) => {
             out.push('{');
             for (i, (key, item)) in map.iter().enumerate() {
-                write_member(out, &key, &item, indent, level, convert, i == 0)?;
+                write_member(out, &key, &item, convert, i == 0)?;
             }
-            pad(out, indent, level);
             out.push('}');
         }
-        Classified::FrozenObject(items) if items.is_empty() => out.push_str("{}"),
         Classified::FrozenObject(items) => {
             out.push('{');
             for (i, pair) in items.iter().enumerate() {
                 let (key, item) = pair.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()?;
-                write_member(out, &key, &item, indent, level, convert, i == 0)?;
+                write_member(out, &key, &item, convert, i == 0)?;
             }
-            pad(out, indent, level);
             out.push('}');
         }
     }

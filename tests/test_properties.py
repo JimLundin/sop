@@ -104,11 +104,6 @@ def test_writing_is_a_fixed_point(value):
 
 
 @given(values)
-def test_indentation_is_presentation_only(value):
-    assert sop.loads[Any](sop.dumps(value, indent=2)) == value
-
-
-@given(values)
 def test_mutable_counterparts_write_identically(value):
     # dict, list and their nested mixtures spell exactly as their immutable
     # counterparts; only reading is immutable-only.

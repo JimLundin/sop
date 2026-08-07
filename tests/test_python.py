@@ -6,10 +6,8 @@ the format's values become Python ones, what the native types refuse, and
 where Python's own semantics need guarding against.
 """
 
-import copy
 import enum
 import math
-import pickle
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -154,15 +152,6 @@ def test_native_values_are_immutable():
         sop.Tagged("a", 1).value = 2  # type: ignore[misc]
 
 
-@pytest.mark.parametrize(
-    "value", [sop.Symbol("x"), sop.Tagged("t", {"a": [1, sop.Symbol("y")]})]
-)
-def test_native_values_copy_and_pickle(value):
-    assert copy.copy(value) == value
-    assert copy.deepcopy(value) == value
-    assert pickle.loads(pickle.dumps(value)) == value
-
-
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
@@ -185,7 +174,7 @@ def test_parse_errors_carry_a_position():
 def test_shape_errors_carry_a_path():
     with pytest.raises(sop.ShapeError) as caught:
         sop.loads[dict[str, int]]("{a: Active}")
-    assert caught.value.path == "$.a"
+    assert str(caught.value).startswith("$.a: ")
     # No position -- the document parsed -- but the attributes every SopError
     # promises are present.
     assert (caught.value.line, caught.value.column) == (0, 0)
@@ -350,11 +339,6 @@ def test_a_tagged_subclass_of_a_builtin_keeps_its_tag():
     assert sop.dumps(Iban("DE89")) == 'iban "DE89"'
     assert sop.dumps({"iban": Iban("DE89")}) == '{iban:iban "DE89"}'
     assert sop.dumps([Iban("DE89")]) == '[iban "DE89"]'
-
-
-def test_indent():
-    assert sop.dumps({"a": 1}, indent=2) == "{\n  a: 1\n}"
-    assert sop.loads[Any](sop.dumps({"a": [1, 2]}, indent=2)) == {"a": (1, 2)}
 
 
 def test_a_runaway_value_is_an_error_not_a_crash():

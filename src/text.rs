@@ -68,11 +68,3 @@ pub(crate) fn write_f64(f: f64, out: &mut String) {
         out.push_str(".0");
     }
 }
-
-/// In pretty mode, a newline and `indent * level` spaces; nothing when compact.
-pub(crate) fn pad(out: &mut String, indent: usize, level: usize) {
-    if indent > 0 {
-        out.push('\n');
-        out.extend(std::iter::repeat_n(' ', indent * level));
-    }
-}

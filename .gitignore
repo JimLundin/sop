@@ -1,5 +1,4 @@
 target/
-stubs/
 __pycache__/
 .hypothesis/
 .pytest_cache/

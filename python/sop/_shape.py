@@ -49,7 +49,6 @@ class ShapeError(SopError):
 
     def __init__(self, path: str, message: str) -> None:
         super().__init__(f"{path}: {message}")
-        self.path = path
         self.message = message
         # A parse error carries a position; a shape error has none, but the
         # attributes exist on every SopError, as the stubs promise.
