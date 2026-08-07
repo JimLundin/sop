@@ -1,0 +1,388 @@
+{
+  "valid": [
+    {
+      "name": "json_object",
+      "src": "{\"a\": 1, \"b\": [true, false, null]}",
+      "out": "{a:1,b:[true,false,null]}"
+    },
+    {
+      "name": "empty_object",
+      "src": "{}",
+      "out": "{}"
+    },
+    {
+      "name": "empty_array",
+      "src": "[]",
+      "out": "[]"
+    },
+    {
+      "name": "trailing_comma_array",
+      "src": "[1,2,3,]",
+      "out": "[1,2,3]"
+    },
+    {
+      "name": "trailing_comma_object",
+      "src": "{a:1,}",
+      "out": "{a:1}"
+    },
+    {
+      "name": "line_comment",
+      "src": "[ // note\n 1 ]",
+      "out": "[1]"
+    },
+    {
+      "name": "line_comment_at_eof",
+      "src": "1 // note",
+      "out": "1"
+    },
+    {
+      "name": "block_comment",
+      "src": "[/* note */1]",
+      "out": "[1]"
+    },
+    {
+      "name": "block_comment_no_nest",
+      "src": "/* /* */ 1",
+      "out": "1"
+    },
+    {
+      "name": "vt_not_line_terminator",
+      "src": "1 // c\u000b2",
+      "out": "1"
+    },
+    {
+      "name": "crlf_line_comment",
+      "src": "[1, // c\r\n2]",
+      "out": "[1,2]"
+    },
+    {
+      "name": "unquoted_keys",
+      "src": "{a:1,$b:2,_c:3}",
+      "out": "{a:1,$b:2,_c:3}"
+    },
+    {
+      "name": "key_needing_quotes",
+      "src": "{\"a b\": 1}",
+      "out": "{\"a b\":1}"
+    },
+    {
+      "name": "no_reserved_words",
+      "src": "{null: 1, if: 2, true: 3}",
+      "out": "{null:1,if:2,true:3}"
+    },
+    {
+      "name": "symbol",
+      "src": "foo",
+      "out": "foo"
+    },
+    {
+      "name": "tag_named_true",
+      "src": "true \"x\"",
+      "out": "true \"x\""
+    },
+    {
+      "name": "right_associative",
+      "src": "a b c 1",
+      "out": "a b c 1"
+    },
+    {
+      "name": "adjacent_identifiers",
+      "src": "[a b]",
+      "out": "[a b]"
+    },
+    {
+      "name": "two_symbols",
+      "src": "[a, b]",
+      "out": "[a,b]"
+    },
+    {
+      "name": "tag_on_array",
+      "src": "set [\"admin\", \"beta\"]",
+      "out": "set [\"admin\",\"beta\"]"
+    },
+    {
+      "name": "nested_tag_object",
+      "src": "geo { lat: 47.6062, lng: -122.3321 }",
+      "out": "geo {lat:47.6062,lng:-122.3321}"
+    },
+    {
+      "name": "leading_plus",
+      "src": "[+7]",
+      "out": "[7]"
+    },
+    {
+      "name": "negative_zero",
+      "src": "[-0]",
+      "out": "[0]"
+    },
+    {
+      "name": "exponent",
+      "src": "[-2.5e10]",
+      "out": "[-25000000000]"
+    },
+    {
+      "name": "fraction",
+      "src": "[0.5,1.25]",
+      "out": "[0.5,1.25]"
+    },
+    {
+      "name": "tenth",
+      "src": "[0.1]",
+      "out": "[0.1]"
+    },
+    {
+      "name": "beyond_double_precision",
+      "src": "[9007199254740993]",
+      "out": "[9007199254740993]"
+    },
+    {
+      "name": "big_integer",
+      "src": "123456789012345678901234567890",
+      "out": "123456789012345680000000000000.0"
+    },
+    {
+      "name": "beyond_i64",
+      "src": "9223372036854775808",
+      "out": "9223372036854776000.0"
+    },
+    {
+      "name": "large_float",
+      "src": "[1e30]",
+      "out": "[1000000000000000000000000000000.0]"
+    },
+    {
+      "name": "small_float",
+      "src": "[1.5e-5]",
+      "out": "[0.000015]"
+    },
+    {
+      "name": "float_repr",
+      "src": "[1e16]",
+      "out": "[10000000000000000.0]"
+    },
+    {
+      "name": "float_underflow",
+      "src": "[1e-400]",
+      "out": "[0]"
+    },
+    {
+      "name": "duplicate_keys",
+      "src": "{a:1,a:2}",
+      "out": "{a:2}"
+    },
+    {
+      "name": "bom",
+      "src": "\ufeff{}",
+      "out": "{}"
+    },
+    {
+      "name": "unicode_whitespace_2028",
+      "src": "[\u20281\u2028]",
+      "out": "[1]"
+    },
+    {
+      "name": "unicode_whitespace_nbsp",
+      "src": "[\u00a01\u00a0]",
+      "out": "[1]"
+    },
+    {
+      "name": "unicode_whitespace_ideographic",
+      "src": "[\u30001\u3000]",
+      "out": "[1]"
+    },
+    {
+      "name": "unicode_identifier",
+      "src": "{\u00e9t\u00e9: caf\u00e9}",
+      "out": "{\u00e9t\u00e9:caf\u00e9}"
+    },
+    {
+      "name": "escapes",
+      "src": "[\"\\u00e9\\n\\\\\\\"\\/\\b\\f\\r\\t\"]",
+      "out": "[\"\u00e9\\n\\\\\\\"/\\b\\f\\r\\t\"]"
+    },
+    {
+      "name": "surrogate_pair",
+      "src": "[\"\\ud83d\\ude00\"]",
+      "out": "[\"\ud83d\ude00\"]"
+    },
+    {
+      "name": "astral_raw",
+      "src": "[\"\ud83d\ude00\"]",
+      "out": "[\"\ud83d\ude00\"]"
+    },
+    {
+      "name": "del_is_unescaped",
+      "src": "[\"\u007f\"]",
+      "out": "[\"\u007f\"]"
+    },
+    {
+      "name": "raw_u2028_in_string",
+      "src": "[\"a\u2028b\"]",
+      "out": "[\"a\u2028b\"]"
+    },
+    {
+      "name": "raw_u0085_in_string",
+      "src": "[\"a\u0085b\"]",
+      "out": "[\"a\u0085b\"]"
+    },
+    {
+      "name": "deep_nesting",
+      "src": "[[[[1]]]]",
+      "out": "[[[[1]]]]"
+    },
+    {
+      "name": "deep_nesting_512",
+      "src": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "out": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
+    },
+    {
+      "name": "typed_response",
+      "src": "{\n  id: uuid \"9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234\",\n  created_at: instant \"2026-08-05T14:23:11Z\",\n  balance: decimal \"19.99\",\n  session_ttl: duration \"PT15M\",\n  location: geo { lat: 47.6062, lng: -122.3321 },\n  roles: set [\"admin\", \"beta\"],\n  status: Active,\n  deleted_at: null,\n}",
+      "out": "{id:uuid \"9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234\",created_at:instant \"2026-08-05T14:23:11Z\",balance:decimal \"19.99\",session_ttl:duration \"PT15M\",location:geo {lat:47.6062,lng:-122.3321},roles:set [\"admin\",\"beta\"],status:Active,deleted_at:null}"
+    },
+    {
+      "name": "discriminated_union",
+      "src": "[\n  Deposit  { amount: decimal \"500.00\", from: iban \"DE89370400440532013000\" },\n  Withdraw { amount: decimal \"20.00\",  atm: \"ATM-4417\" },\n  Reversal { of: uuid \"8c1d0a3e-...\", reason: InsufficientFunds },\n]",
+      "out": "[Deposit {amount:decimal \"500.00\",from:iban \"DE89370400440532013000\"},Withdraw {amount:decimal \"20.00\",atm:\"ATM-4417\"},Reversal {of:uuid \"8c1d0a3e-...\",reason:InsufficientFunds}]"
+    },
+    {
+      "name": "configuration",
+      "src": "service {\n  name: \"billing-api\",\n  listen: [\n    tcp { host: \"0.0.0.0\", port: 8080 },\n    unix \"/var/run/billing.sock\",\n  ],\n\n  // secret(env(\"...\"))\n  db_password: secret env \"BILLING_DB_PASSWORD\",\n\n  replicas: 3,\n  canary: false,\n}",
+      "out": "service {name:\"billing-api\",listen:[tcp {host:\"0.0.0.0\",port:8080},unix \"/var/run/billing.sock\"],db_password:secret env \"BILLING_DB_PASSWORD\",replicas:3,canary:false}"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "tag_on_key",
+      "src": "{ foo bar: 1 }"
+    },
+    {
+      "name": "number_as_tag",
+      "src": "[1 2]"
+    },
+    {
+      "name": "missing_comma_object",
+      "src": "{a: 1 b: 2}"
+    },
+    {
+      "name": "no_digit_before_point",
+      "src": "[.5]"
+    },
+    {
+      "name": "no_digit_after_point",
+      "src": "[1.]"
+    },
+    {
+      "name": "single_quotes",
+      "src": "['x']"
+    },
+    {
+      "name": "leading_zero",
+      "src": "[01]"
+    },
+    {
+      "name": "empty_exponent",
+      "src": "[1e]"
+    },
+    {
+      "name": "number_key",
+      "src": "{1: 2}"
+    },
+    {
+      "name": "raw_control_in_string",
+      "src": "[\"\u0001\"]"
+    },
+    {
+      "name": "newline_in_string",
+      "src": "[\"a\nb\"]"
+    },
+    {
+      "name": "unterminated_string",
+      "src": "\"x"
+    },
+    {
+      "name": "unterminated_block_comment",
+      "src": "/* x"
+    },
+    {
+      "name": "unterminated_object",
+      "src": "{a: 1"
+    },
+    {
+      "name": "unterminated_array",
+      "src": "[1"
+    },
+    {
+      "name": "empty_document",
+      "src": ""
+    },
+    {
+      "name": "only_a_comment",
+      "src": "// nothing"
+    },
+    {
+      "name": "interior_bom",
+      "src": "[1, \ufeff2]"
+    },
+    {
+      "name": "missing_value",
+      "src": "{a:}"
+    },
+    {
+      "name": "empty_element",
+      "src": "[,]"
+    },
+    {
+      "name": "double_comma",
+      "src": "[1,,2]"
+    },
+    {
+      "name": "top_level_colon",
+      "src": "a:1"
+    },
+    {
+      "name": "bad_escape",
+      "src": "[\"\\x41\"]"
+    },
+    {
+      "name": "short_unicode_escape",
+      "src": "[\"\\u12\"]"
+    },
+    {
+      "name": "plus_without_digits",
+      "src": "[+]"
+    },
+    {
+      "name": "float_overflow",
+      "src": "[5E547]"
+    },
+    {
+      "name": "lone_surrogate",
+      "src": "[\"\\ud800\"]"
+    },
+    {
+      "name": "lone_low_surrogate",
+      "src": "[\"\\udc00\"]"
+    },
+    {
+      "name": "half_a_pair",
+      "src": "[\"\\ud83d\\u0041\"]"
+    },
+    {
+      "name": "float_overflow_negative",
+      "src": "-1e400"
+    },
+    {
+      "name": "integer_overflow",
+      "src": "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "trailing_content",
+      "src": "1 2"
+    },
+    {
+      "name": "error_on_line_three",
+      "src": "[\n  1,\n  2 3\n]"
+    }
+  ]
+}

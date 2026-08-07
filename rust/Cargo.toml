@@ -1,0 +1,9 @@
+[package]
+name = "sop"
+version = "0.1.0"
+default-run = "sop"
+edition = "2024"
+
+[dependencies]
+thiserror = "2.0.19"
+unicode-ident = "1.0.24"

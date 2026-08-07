@@ -1,0 +1,6 @@
+target/
+_core.so
+__pycache__/
+.hypothesis/
+.pytest_cache/
+.coverage
