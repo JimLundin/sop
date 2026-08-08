@@ -12,11 +12,10 @@
 use std::fmt::Write as _;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyFloat, PyInt, PyList, PyString, PyTuple};
-use pyo3::ffi;
+use pyo3::types::{PyBool, PyFloat, PyFrozenDict, PyFrozenDictMethods, PyInt, PyString, PyTuple};
 
 use crate::text::{escape_string, is_identifier, write_f64};
-use crate::{FROZENDICT, Recursion, Symbol, Tagged, ser_error};
+use crate::{Recursion, Symbol, Tagged, ser_error};
 
 enum Classified<'py> {
     Null,
@@ -27,8 +26,7 @@ enum Classified<'py> {
     Symbol(String),
     Tagged(String, Bound<'py, PyAny>),
     Array(Bound<'py, PyTuple>),
-    /// A frozendict's `(key, value)` pairs, via `items()`.
-    Object(Bound<'py, PyList>),
+    Object(Bound<'py, PyFrozenDict>),
 }
 
 /// Classify a Python object as a sop value.
@@ -77,16 +75,8 @@ fn classify<'py>(value: &Bound<'py, PyAny>) -> PyResult<Option<Classified<'py>>>
     if let Ok(items) = value.cast_exact::<PyTuple>() {
         return Ok(Some(Classified::Array(items.clone())));
     }
-    if let Some(t) = FROZENDICT.get()
-        && value.get_type().as_ptr() == t.as_ptr()
-    {
-        // `PyMapping_Items` directly, not `cast::<PyMapping>()`: that cast
-        // asks `collections.abc.Mapping.__instancecheck__`, which is a Python
-        // call on every object written -- and one deep enough to exhaust the
-        // stack before this function's own recursion guard can report it.
-        let items =
-            unsafe { Bound::from_owned_ptr_or_err(value.py(), ffi::PyMapping_Items(value.as_ptr()))? };
-        return Ok(Some(Classified::Object(items.cast_into::<PyList>()?)));
+    if let Ok(map) = value.cast_exact::<PyFrozenDict>() {
+        return Ok(Some(Classified::Object(map.clone())));
     }
     Ok(None)
 }
@@ -178,10 +168,9 @@ impl<'a, 'py> Writer<'a, 'py> {
                 }
                 self.out.push(']');
             }
-            Classified::Object(items) => {
+            Classified::Object(map) => {
                 self.out.push('{');
-                for (i, pair) in items.iter().enumerate() {
-                    let (key, item) = pair.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()?;
+                for (i, (key, item)) in map.iter().enumerate() {
                     if i > 0 {
                         self.out.push(',');
                     }

@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyString, PyTuple};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyFrozenDict, PyString, PyTuple};
 
 use crate::text::{is_id_part, is_id_start, is_line_terminator};
 use crate::{Recursion, Symbol, Tagged, sop_error};
@@ -313,10 +313,7 @@ impl<'a, 'py> Parser<'a, 'py> {
                 }
             }
         }
-        let frozen = unsafe {
-            Bound::from_owned_ptr_or_err(self.py, pyo3::ffi::PyFrozenDict_New(map.as_ptr()))?
-        };
-        Ok(frozen.unbind())
+        Ok(PyFrozenDict::from_sequence(map.as_any())?.into_any().unbind())
     }
 
     // -- identifiers and keys -----------------------------------------------

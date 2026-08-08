@@ -10,7 +10,11 @@ name = "_core"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = "0.29.1"
+# Pinned to git for `PyFrozenDict`, which is merged but unreleased: 0.29.2
+# exposes only the raw `PyFrozenDict_New` FFI item, which costs the reader,
+# the writer and module init an unsafe block each. Back to a version
+# requirement once 0.30 is out.
+pyo3 = { git = "https://github.com/PyO3/pyo3", rev = "51dcc7dbd30db78953ba6b190bec97a115af7d76" }
 unicode-ident = "1.0.24"
 
 [features]

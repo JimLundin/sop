@@ -27,7 +27,6 @@ mod text;
 mod write;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::OnceLock;
 
 use pyo3::create_exception;
 use pyo3::exceptions::PyValueError;
@@ -35,9 +34,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyGenericAlias, PyType};
 
 create_exception!(_core, SopError, PyValueError);
-
-/// The `builtins.frozendict` type, taken once at module import.
-pub(crate) static FROZENDICT: OnceLock<Py<PyAny>> = OnceLock::new();
 
 pub(crate) fn sop_error(message: String, line: usize, column: usize) -> PyErr {
     Python::attach(|py| {
@@ -84,7 +80,7 @@ impl Drop for Recursion {
 
 /// A bare identifier used as a scalar. A symbol is never equal to a string,
 /// which is why this is a distinct type and not a `str` subclass.
-#[pyclass(frozen, eq, hash, skip_from_py_object, module = "sop._core")]
+#[pyclass(frozen, eq, hash, module = "sop._core")]
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub(crate) struct Symbol {
     #[pyo3(get)]
@@ -228,15 +224,6 @@ fn dumps(value: &Bound<'_, PyAny>, convert: &Bound<'_, PyAny>) -> PyResult<Strin
 /// detail of `sop`: import the package, not this module.
 #[pymodule]
 mod _core {
-    use pyo3::prelude::*;
-
     #[pymodule_export]
     use super::{SopError, Symbol, Tagged, dumps, loads};
-
-    #[pymodule_init]
-    fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
-        let frozendict = module.py().import("builtins")?.getattr("frozendict")?;
-        let _ = super::FROZENDICT.set(frozendict.unbind());
-        Ok(())
-    }
 }
