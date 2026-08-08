@@ -207,6 +207,14 @@ def test_value_names_the_untyped_result():
     assert sop.loads[sop.Value](text) == sop.loads[Any](text)
 
 
+def test_the_value_shape_does_not_re_walk_the_parsed_value():
+    # `Value` is a check that cannot fail, so it answers what was parsed
+    # rather than walking it to build an equal copy.  Walking it would exhaust
+    # the stack on a document the parser itself handles comfortably.
+    deep = "[" * 2_000 + "1" + "]" * 2_000
+    assert sop.loads[sop.Value](deep) == sop.loads[Any](deep)
+
+
 def test_a_type_alias_is_its_right_hand_side():
     type Port = int
     assert sop.loads[Port]("8080") == 8080

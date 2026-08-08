@@ -197,6 +197,14 @@ through `convert` and the frozen copy it returns. That is the price of the
 writer having one entrance instead of two, and it is only paid by values the
 writer did not produce.
 
+Reading mirrors that. `loads[Any]` and `loads[Value]` cost nothing above the
+parse: `Value` is exactly what the parser produces, so reading through it is a
+check that cannot fail, and it answers the parsed value itself rather than
+rebuilding an equal copy. Every other shape is walked in Python, which costs
+roughly **5x** the parse, and a union costs several times that again, because
+its members are tried in turn until one fits. For hot data, prefer a shape
+with no union in it — or read untyped.
+
 ## Layout
 
 ```

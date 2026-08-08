@@ -514,6 +514,13 @@ def test_mixed_union():
     assert isinstance(sop.loads[Deposit | int]('Deposit { amount: Decimal "1" }'), Deposit)
 
 
+def test_a_union_member_that_is_not_a_class_names_no_tag():
+    # `list[int]` is a shape but not a class, so it can name no tag and cannot
+    # be what the union keys on; it is tried in turn like any other member.
+    assert sop.loads[list[int] | int]("[1, 2]") == [1, 2]
+    assert sop.loads[list[int] | int]("7") == 7
+
+
 def test_a_shared_tag_in_a_union_is_an_error():
     # A shared discriminant is a schema bug; silently degrading to trying
     # members in order would hide it until the members diverged.

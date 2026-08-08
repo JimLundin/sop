@@ -245,8 +245,15 @@ def _decode(value: Value, shape: TypeForm[Any], path: str = "$") -> Any:
     parameterised type, or a plain class; each is read by the helper below
     that knows about that kind, so neither of them dispatches on both."""
     if isinstance(shape, typing.TypeAliasType):
-        # A `type X = ...` alias -- the SDK's own `Value` included -- denotes
-        # its right-hand side.
+        if shape is Value:
+            # `Value` is the set the parser produces, and what the parser
+            # produced is the only thing `decode` is ever handed -- so reading
+            # through it is a check that cannot fail, and walking the value to
+            # make it would do nothing but rebuild an equal copy.  It answers
+            # the parsed value itself, as `Any` does; what separates the two is
+            # static, and stays static.
+            return value
+        # A `type X = ...` alias denotes its right-hand side.
         return _decode(value, shape.__value__, path)
     if shape is Any:
         return value
