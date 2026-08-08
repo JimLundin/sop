@@ -29,6 +29,11 @@ is spelled — live once, in `src/text.rs`. There is no intermediate document
 tree, no owned value tree, and no Rust-facing API: the crate's library is
 named `_core`, after the extension module it becomes.
 
+Reader and writer know exactly one set of values — the immutable one the
+reader produces. Everything else, a dataclass and a `dict` alike, reaches the
+writer through the single `convert` hook, so there is one way into the writer
+rather than two.
+
 ## The SDK
 
 `python/` is `sop._core`, that extension module, plus a shape layer. No
@@ -38,9 +43,9 @@ extension is built against the interpreter it runs on, not the limited API.
 Two functions.
 
 ```python
-order  = sop.loads[Order](text)          # Order
-events = sop.loads[list[Event]](text)    # list[Event]
-raw    = sop.loads[Any](text)            # whatever is there
+order = sop.loads[Order](text)  # Order
+events = sop.loads[list[Event]](text)  # list[Event]
+raw = sop.loads[Any](text)  # whatever is there
 
 text = sop.dumps(order)
 ```
@@ -55,7 +60,9 @@ escape hatch with its result typed precisely.
 Everything read is immutable. Mutation is opt-in: a shape such as `list[T]`
 or `dict[str, V]` declares it, and the decoded result is freshly built.
 Writing accepts the mutable counterparts — `dict`, `list`, `set` — and spells
-them identically.
+them identically; the core knows only the immutable set, so those are frozen
+by the shape layer on the way out, and a value that came from `loads` is
+written without touching Python at all.
 
 The whole public API is seven names: `loads`, `dumps`, `Value`, `Symbol`,
 `Tagged`, `SopError`, and `ShapeError` (a subclass of `SopError`, so one
@@ -69,16 +76,19 @@ A class is carried under its own name unless it says otherwise:
 
 ```python
 @dataclass
-class Deposit:                # carried as `Deposit { ... }`
+class Deposit:  # carried as `Deposit { ... }`
     amount: Money
-    from_: str = field(metadata={"sop": "from"})   # reads the key `from`
+    from_: str = field(metadata={"sop": "from"})  # reads the key `from`
+
 
 @dataclass
 class Account:
-    __sop_tag__ = None        # carried as a bare `{ ... }`
+    __sop_tag__ = None  # carried as a bare `{ ... }`
+
 
 class Iban(str):
-    __sop_tag__ = "iban"      # carried as `iban "DE89…"`
+    __sop_tag__ = "iban"  # carried as `iban "DE89…"`
+
 
 Event = Deposit | Withdraw | Reversal
 events = sop.loads[list[Event]](text)
@@ -96,13 +106,20 @@ string, built with `cls(text)` and spelled with `str(obj)`. A type that cannot
 be built from its own spelling supplies `__sop_parse__`:
 
 ```python
-class Money(Decimal):    __sop_tag__ = "decimal"
-class Id(UUID):          __sop_tag__ = "uuid"
+class Money(Decimal):
+    __sop_tag__ = "decimal"
+
+
+class Id(UUID):
+    __sop_tag__ = "uuid"
+
 
 class Instant(datetime):
     __sop_tag__ = "instant"
+
     @classmethod
-    def __sop_parse__(cls, text): return cls.fromisoformat(text)
+    def __sop_parse__(cls, text):
+        return cls.fromisoformat(text)
 ```
 
 The SDK has no built-in opinion about what `Decimal` or `UUID` are called on
@@ -146,13 +163,18 @@ the SDK's decision, made in the parser. `Symbol` and `Tagged` are native types a
 validate on construction: a symbol must be an identifier, `Symbol("null")` is
 refused because `null` already has a spelling on this side, and a `Tagged`
 cannot hold `None`, a bool or a `Symbol` — a tag cannot be applied to a bare
-symbol, so such a value could never be written or read back. That makes them
+symbol, so such a value could never be written or read back. Those two say so
+themselves, with a plain `ValueError`; the SDK does not restate the rule or
+re-wrap the error. That makes them
 unable to hold a value the parser could never produce, so the writer is total
 and Python `==` is the only comparison you need. Comparing Python objects is
 Python's business.
 
-Throughput is machine-dependent; on one box, `loads` runs at ~40 MB/s, with
-the cost dominated by the Python objects it has to build.
+Throughput is machine-dependent; on one box, `loads` runs at ~35 MB/s and
+`dumps` of what it produced at ~40 MB/s, the cost dominated by the Python
+objects involved either way. Writing a plain `dict` or `list` is slower —
+each one costs a hop through `convert` and the frozen copy it returns — which
+is the price of the writer having one entrance rather than two.
 
 ## Layout
 

@@ -6,22 +6,21 @@
 //! as text ([`write`]); [`text`] holds the lexical facts they share. There is
 //! no intermediate document tree.
 //!
-//! Value mapping. Reading produces immutable values only; writing also
-//! accepts their mutable counterparts:
+//! Value mapping. One set of values, immutable, read and written alike:
 //!
 //! ```text
-//! sop object   <->  frozendict[str, Value]   (dict is written too)
-//! sop array    <->  tuple[Value, ...]        (list is written too)
+//! sop object   <->  frozendict[str, Value]
+//! sop array    <->  tuple[Value, ...]
 //! sop string   <->  str
 //! sop number   <->  int | float
 //! sop symbol   <->  True | False | None | Symbol(name)
 //! sop tagged   <->  Tagged(tag, value)
 //! ```
 //!
-//! Anything else -- a dataclass, an enum, a set -- is spelled by the
-//! `convert` hook the SDK passes to `dumps`: one Python call per object the
-//! writer cannot classify, and the traversal continues in place, so the
-//! graph is walked exactly once.
+//! Anything else -- a dataclass, an enum, a set, and the mutable
+//! counterparts `list` and `dict` -- is spelled by the `convert` hook the SDK
+//! passes to `dumps`: one Python call per object the writer cannot classify,
+//! and the traversal continues in place, so the graph is walked exactly once.
 
 mod parse;
 mod text;
@@ -201,13 +200,16 @@ fn loads(py: Python<'_>, text: &str) -> PyResult<Py<PyAny>> {
 }
 
 /// Write a value as sop text. `convert` is called once per object the
-/// writer cannot classify and must return a sop value to spell in its place.
-/// Raises `SopError` for a value with no sop representation.
+/// writer cannot classify -- every mutable container included -- and must
+/// return a sop value to spell in its place. Raises `SopError` for a value
+/// with no sop representation, and passes through whatever `convert` itself
+/// raises: `Symbol` and `Tagged` refuse a bad name with a plain `ValueError`,
+/// and the SDK does not restate the rule by re-wrapping it.
 #[pyfunction]
 fn dumps(value: &Bound<'_, PyAny>, convert: &Bound<'_, PyAny>) -> PyResult<String> {
-    let mut out = String::new();
-    write::emit(value, &mut out, convert, false, true)?;
-    Ok(out)
+    let mut writer = write::Writer::new(convert);
+    writer.emit(value, false, true)?;
+    Ok(writer.out)
 }
 
 // Declared as an inline `mod`, not a function: stub generation only sees

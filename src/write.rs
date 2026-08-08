@@ -1,16 +1,19 @@
 //! Writing Python values out as sop text.
 //!
-//! One traversal and one writer: `emit` walks the value and spells it
+//! One traversal and one writer: [`Writer`] walks the value and spells it
 //! directly, so escaping and number spelling live here and nowhere else.
-//! The `convert` hook the SDK passes to `dumps` spells one
-//! unclassifiable object as a plain value — its head only, children
-//! untouched — inside the same traversal, so the graph is walked exactly
-//! once.
+//!
+//! The writer knows exactly the values reading produces — the immutable set.
+//! Everything else, the mutable counterparts included, is spelled by the
+//! `convert` hook the SDK passes to `dumps`: one Python call per object the
+//! writer cannot classify, its head only with its children untouched, inside
+//! this same traversal, so the graph is walked exactly once.
 
 use std::fmt::Write as _;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyMapping, PyString, PyTuple};
+use pyo3::types::{PyBool, PyFloat, PyInt, PyList, PyString, PyTuple};
+use pyo3::ffi;
 
 use crate::text::{escape_string, is_identifier, write_f64};
 use crate::{FROZENDICT, Recursion, Symbol, Tagged, ser_error};
@@ -23,11 +26,9 @@ enum Classified<'py> {
     Str(String),
     Symbol(String),
     Tagged(String, Bound<'py, PyAny>),
-    Array(Bound<'py, PyList>),
-    Tuple(Bound<'py, PyTuple>),
-    Object(Bound<'py, PyDict>),
+    Array(Bound<'py, PyTuple>),
     /// A frozendict's `(key, value)` pairs, via `items()`.
-    FrozenObject(Bound<'py, PyList>),
+    Object(Bound<'py, PyList>),
 }
 
 /// Classify a Python object as a sop value.
@@ -73,175 +74,157 @@ fn classify<'py>(value: &Bound<'py, PyAny>) -> PyResult<Option<Classified<'py>>>
     if let Ok(f) = value.cast_exact::<PyFloat>() {
         return Ok(Some(Classified::Float(f.value())));
     }
-    if let Ok(items) = value.cast_exact::<PyList>() {
-        return Ok(Some(Classified::Array(items.clone())));
-    }
     if let Ok(items) = value.cast_exact::<PyTuple>() {
-        return Ok(Some(Classified::Tuple(items.clone())));
-    }
-    if let Ok(map) = value.cast_exact::<PyDict>() {
-        return Ok(Some(Classified::Object(map.clone())));
+        return Ok(Some(Classified::Array(items.clone())));
     }
     if let Some(t) = FROZENDICT.get()
         && value.get_type().as_ptr() == t.as_ptr()
     {
-        let items = value.cast::<PyMapping>()?.items()?;
-        return Ok(Some(Classified::FrozenObject(items)));
+        // `PyMapping_Items` directly, not `cast::<PyMapping>()`: that cast
+        // asks `collections.abc.Mapping.__instancecheck__`, which is a Python
+        // call on every object written -- and one deep enough to exhaust the
+        // stack before this function's own recursion guard can report it.
+        let items =
+            unsafe { Bound::from_owned_ptr_or_err(value.py(), ffi::PyMapping_Items(value.as_ptr()))? };
+        return Ok(Some(Classified::Object(items.cast_into::<PyList>()?)));
     }
     Ok(None)
 }
 
-/// An object key. Exact `str` only: under the protocol a str subclass
-/// carries a tag, and a key has nowhere to put one, so accepting it here
-/// would drop the tag silently. Written bare when its spelling is an
-/// identifier, quoted otherwise.
-fn write_key(out: &mut String, key: &Bound<'_, PyAny>) -> PyResult<()> {
-    match key.cast_exact::<PyString>() {
-        Ok(key) => {
-            let key = key
-                .to_cow()
-                .map_err(|_| ser_error("object key contains a lone surrogate".to_string()))?;
-            if is_identifier(&key) {
-                out.push_str(&key);
-            } else {
-                escape_string(&key, out);
-            }
-            Ok(())
-        }
-        Err(_) if key.is_instance_of::<PyString>() => Err(ser_error(
-            "a subclass of str carries a tag, which an object key cannot hold".to_string(),
-        )),
-        Err(_) => Err(ser_error("object keys must be strings".to_string())),
-    }
+pub(crate) struct Writer<'a, 'py> {
+    pub(crate) out: String,
+    convert: &'a Bound<'py, PyAny>,
 }
 
-fn refuse_tagged_symbol(under_tag: bool, name: &str) -> PyResult<()> {
-    if under_tag {
-        return Err(ser_error(format!("a tag cannot be applied to a bare symbol (`{name}`)")));
+impl<'a, 'py> Writer<'a, 'py> {
+    pub(crate) fn new(convert: &'a Bound<'py, PyAny>) -> Self {
+        Writer { out: String::new(), convert }
     }
-    Ok(())
-}
 
-/// One `key: value` member.
-fn write_member(
-    out: &mut String,
-    key: &Bound<'_, PyAny>,
-    item: &Bound<'_, PyAny>,
-    convert: &Bound<'_, PyAny>,
-    first: bool,
-) -> PyResult<()> {
-    if !first {
-        out.push(',');
-    }
-    write_key(out, key)?;
-    out.push(':');
-    emit(item, out, convert, false, true)
-}
-
-/// Spell a Python value into `out`.
-///
-/// `convert` spells one unclassifiable object as a plain value, and
-/// `may_convert` is false exactly when the value at hand *is* a hook result,
-/// so a hook that returns another unknown is an error rather than a loop.
-/// `under_tag` is true for a tag's payload, where a bare symbol has no legal
-/// spelling.
-pub(crate) fn emit(
-    value: &Bound<'_, PyAny>,
-    out: &mut String,
-    convert: &Bound<'_, PyAny>,
-    under_tag: bool,
-    may_convert: bool,
-) -> PyResult<()> {
-    // A Python value can nest arbitrarily, or cyclically, and overflowing the
-    // stack here is an abort the caller cannot catch. Borrowing CPython's own
-    // recursion guard -- as the stdlib json encoder does -- turns that into a
-    // RecursionError at the interpreter's limit, with no limit of our own.
-    let _guard = Recursion::enter(value.py(), c" while writing sop")?;
-    let kind = match classify(value)? {
-        Some(kind) => kind,
-        None => {
+    /// Spell a Python value.
+    ///
+    /// `may_convert` is false exactly when the value at hand *is* a hook
+    /// result, so a hook that returns another unknown is an error rather than
+    /// a loop. `under_tag` is true for a tag's payload, where a bare symbol
+    /// has no legal spelling.
+    pub(crate) fn emit(
+        &mut self,
+        value: &Bound<'_, PyAny>,
+        under_tag: bool,
+        may_convert: bool,
+    ) -> PyResult<()> {
+        // A Python value can nest arbitrarily, or cyclically, and overflowing
+        // the stack here is an abort the caller cannot catch. Borrowing
+        // CPython's own recursion guard -- as the stdlib json encoder does --
+        // turns that into a RecursionError at the interpreter's limit, with no
+        // limit of our own.
+        let _guard = Recursion::enter(value.py(), c" while writing sop")?;
+        let Some(kind) = classify(value)? else {
             if !may_convert {
                 return Err(ser_error(format!("not a sop value: {}", value.repr()?)));
             }
-            let converted = convert.call1((value,))?;
-            return emit(&converted, out, convert, under_tag, false);
-        }
-    };
-    match kind {
-        Classified::Null => {
-            refuse_tagged_symbol(under_tag, "null")?;
-            out.push_str("null");
-        }
-        Classified::Bool(b) => {
-            let name = if b { "true" } else { "false" };
-            refuse_tagged_symbol(under_tag, name)?;
-            out.push_str(name);
-        }
-        // Symbol and Tagged validate their names on construction, so the
-        // writer cannot be handed one that does not round-trip.
-        Classified::Symbol(name) => {
-            refuse_tagged_symbol(under_tag, &name)?;
-            out.push_str(&name);
-        }
-        Classified::Str(s) => escape_string(&s, out),
-        // Python integers are unbounded; the format's numeric domain is i64
-        // or f64. A larger one would not read back to an equal value, so it
-        // is refused for the same reason the parser refuses a literal that
-        // overflows to infinity. The remedy is the same either way: carry
-        // exact values as a tagged string.
-        Classified::Int(i) => match i.extract::<i64>() {
-            Ok(v) => {
-                let _ = write!(out, "{v}");
+            let converted = self.convert.call1((value,))?;
+            return self.emit(&converted, under_tag, false);
+        };
+        match kind {
+            Classified::Null => {
+                self.refuse_tagged_symbol(under_tag, "null")?;
+                self.out.push_str("null");
             }
-            Err(_) => {
-                return Err(ser_error(format!(
-                    "{} is out of range for sop's numeric domain; use a tagged string",
-                    i.str()?.to_cow()?
-                )));
+            Classified::Bool(b) => {
+                let name = if b { "true" } else { "false" };
+                self.refuse_tagged_symbol(under_tag, name)?;
+                self.out.push_str(name);
             }
-        },
-        Classified::Float(f) if f.is_finite() => write_f64(f, out),
-        Classified::Float(f) => return Err(ser_error(format!("{f} has no sop representation"))),
-        Classified::Tagged(tag, payload) => {
-            out.push_str(&tag);
-            out.push(' ');
-            emit(&payload, out, convert, true, true)?;
-        }
-        Classified::Array(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
+            // Symbol and Tagged validate their names on construction, so the
+            // writer cannot be handed one that does not round-trip.
+            Classified::Symbol(name) => {
+                self.refuse_tagged_symbol(under_tag, &name)?;
+                self.out.push_str(&name);
+            }
+            Classified::Str(s) => escape_string(&s, &mut self.out),
+            // Python integers are unbounded; the format's numeric domain is
+            // i64 or f64. A larger one would not read back to an equal value,
+            // so it is refused for the same reason the parser refuses a
+            // literal that overflows to infinity. The remedy is the same
+            // either way: carry exact values as a tagged string.
+            Classified::Int(i) => match i.extract::<i64>() {
+                Ok(v) => {
+                    let _ = write!(self.out, "{v}");
                 }
-                emit(&item, out, convert, false, true)?;
-            }
-            out.push(']');
-        }
-        Classified::Tuple(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
+                Err(_) => {
+                    return Err(ser_error(format!(
+                        "{} is out of range for sop's numeric domain; use a tagged string",
+                        i.str()?.to_cow()?
+                    )));
                 }
-                emit(&item, out, convert, false, true)?;
+            },
+            Classified::Float(f) if f.is_finite() => write_f64(f, &mut self.out),
+            Classified::Float(f) => {
+                return Err(ser_error(format!("{f} has no sop representation")));
             }
-            out.push(']');
+            Classified::Tagged(tag, payload) => {
+                self.out.push_str(&tag);
+                self.out.push(' ');
+                self.emit(&payload, true, true)?;
+            }
+            Classified::Array(items) => {
+                self.out.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        self.out.push(',');
+                    }
+                    self.emit(&item, false, true)?;
+                }
+                self.out.push(']');
+            }
+            Classified::Object(items) => {
+                self.out.push('{');
+                for (i, pair) in items.iter().enumerate() {
+                    let (key, item) = pair.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()?;
+                    if i > 0 {
+                        self.out.push(',');
+                    }
+                    self.write_key(&key)?;
+                    self.out.push(':');
+                    self.emit(&item, false, true)?;
+                }
+                self.out.push('}');
+            }
         }
-        Classified::Object(map) => {
-            out.push('{');
-            for (i, (key, item)) in map.iter().enumerate() {
-                write_member(out, &key, &item, convert, i == 0)?;
-            }
-            out.push('}');
+        Ok(())
+    }
+
+    fn refuse_tagged_symbol(&self, under_tag: bool, name: &str) -> PyResult<()> {
+        if under_tag {
+            return Err(ser_error(format!(
+                "a tag cannot be applied to a bare symbol (`{name}`)"
+            )));
         }
-        Classified::FrozenObject(items) => {
-            out.push('{');
-            for (i, pair) in items.iter().enumerate() {
-                let (key, item) = pair.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()?;
-                write_member(out, &key, &item, convert, i == 0)?;
+        Ok(())
+    }
+
+    /// An object key. Exact `str` only: under the protocol a str subclass
+    /// carries a tag, and a key has nowhere to put one, so accepting it here
+    /// would drop the tag silently. Written bare when its spelling is an
+    /// identifier, quoted otherwise.
+    fn write_key(&mut self, key: &Bound<'_, PyAny>) -> PyResult<()> {
+        match key.cast_exact::<PyString>() {
+            Ok(key) => {
+                let key = key
+                    .to_cow()
+                    .map_err(|_| ser_error("object key contains a lone surrogate".to_string()))?;
+                if is_identifier(&key) {
+                    self.out.push_str(&key);
+                } else {
+                    escape_string(&key, &mut self.out);
+                }
+                Ok(())
             }
-            out.push('}');
+            Err(_) if key.is_instance_of::<PyString>() => Err(ser_error(
+                "a subclass of str carries a tag, which an object key cannot hold".to_string(),
+            )),
+            Err(_) => Err(ser_error("object keys must be strings".to_string())),
         }
     }
-    Ok(())
 }

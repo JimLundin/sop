@@ -72,6 +72,17 @@ class Withdraw:
     atm: str
 
 
+@dataclass
+class Branch:
+    name: str
+    children: list[Branch] = field(default_factory=list)
+
+
+class Priority(enum.Enum):
+    Low = 1  # a non-string value, so the member's name is its spelling
+    High = 2
+
+
 def roundtrip(shape, value):
     """Write a value and read it back through the same shape."""
     return sop.loads[shape](sop.dumps(value))
@@ -291,15 +302,16 @@ def test_enum_rejects_an_unknown_symbol():
         sop.loads[Colour]("Green")
 
 
-def test_an_enum_value_with_no_symbol_spelling_is_a_shape_error():
-    # Only SopError escapes the shape layer; Symbol's own ValueError does not.
+def test_an_enum_value_with_no_symbol_spelling_is_refused():
+    # `Symbol` decides what a symbol may be, and says so itself: the shape
+    # layer does not restate the rule or re-wrap the error.
     class Weird(enum.Enum):
         Spaced = "not an identifier"
         Reserved = "true"
 
-    with pytest.raises(sop.ShapeError, match="Weird.Spaced has no symbol spelling"):
+    with pytest.raises(ValueError, match="not an identifier"):
         sop.dumps(Weird.Spaced)
-    with pytest.raises(sop.ShapeError, match="Weird.Reserved has no symbol spelling"):
+    with pytest.raises(ValueError, match="spelled with the Python value"):
         sop.dumps(Weird.Reserved)
 
 
@@ -473,17 +485,6 @@ def test_a_shared_tag_in_a_union_is_an_error():
 
     with pytest.raises(sop.ShapeError, match="share the tag `dup`"):
         sop.loads[One | Two]("dup {x: 1}")
-
-
-@dataclass
-class Branch:
-    name: str
-    children: list[Branch] = field(default_factory=list)
-
-
-class Priority(enum.Enum):
-    Low = 1
-    High = 2
 
 
 def test_a_non_string_enum_matches_by_name():

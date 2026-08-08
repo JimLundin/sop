@@ -43,6 +43,12 @@ strict = true
 [tool.pyright]
 include = ["python/sop"]
 typeCheckingMode = "strict"
+# Named rather than inferred: without these pyright resolves whichever
+# interpreter it finds first, and reports the 3.12+ syntax and the 3.15
+# builtins as errors unless it happens to be run inside the activated venv.
+pythonVersion = "3.15"
+venvPath = "."
+venv = ".venv"
 
 [tool.pytest.ini_options]
 addopts = "--cov=sop --cov-branch --cov-fail-under=100 --cov-report=term-missing"

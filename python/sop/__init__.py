@@ -12,8 +12,9 @@ Reading takes a shape because text carries no type; writing does not, because
 the object does.  There is no shapeless `loads`: `loads[Any]` is the escape
 hatch and it has to be written down.
 
-Untyped reading produces immutable values only; writing also accepts their
-mutable counterparts:
+One set of values, immutable, is what reading produces and what the core
+writes; the mutable counterparts are frozen on the way out and spell
+identically:
 
     sop object   <->  frozendict[str, Value]   (dict is written too)
     sop array    <->  tuple[Value, ...]        (list is written too)
@@ -35,26 +36,15 @@ The format itself is implemented once, in Rust (`sop._core`).  There is no
 pure-Python parser and no fallback.
 """
 
-from typing import Any as _Any
-from typing import TypeForm as _TypeForm
-from typing import cast as _cast
+from typing import Any, TypeForm
 
 from . import _shape
 from ._core import SopError, Symbol, Tagged
 from ._core import dumps as _dumps
 from ._core import loads as _loads
-from ._shape import ShapeError
+from ._shape import ShapeError, Value
 
 __all__ = ["ShapeError", "SopError", "Symbol", "Tagged", "Value", "dumps", "loads"]
-
-type Value = (
-    None | bool | int | float | str | Symbol | Tagged | tuple[Value, ...] | frozendict[str, Value]
-)
-"""The closed set untyped reading produces — immutable throughout.  Mutation
-is opt-in: a shape such as `list[T]` or `dict[str, V]` declares it, and the
-decoded result is freshly built.  `loads[Value]` is the escape hatch with its
-result typed precisely; `loads[Any]` reads the same way and types the result
-as `Any`.  Kept in step with the alias in `_core.pyi`."""
 
 
 class _TypedLoads[T]:
@@ -66,33 +56,27 @@ class _TypedLoads[T]:
         self._shape = shape
 
     def __call__(self, text: str) -> T:
-        return _cast("T", _shape.decode(_loads(text), self._shape))
-
-    def __repr__(self) -> str:
-        # `list[int].__name__` is "list", which loses the parameter; only a
-        # plain class is better described by its name than by str().
-        shape = self._shape
-        name = shape.__name__ if isinstance(shape, type) else shape
-        return f"sop.loads[{name!s}]"
+        # Declared rather than cast: `decode` answers `Any`, and the shape it
+        # was given is what says the answer is a `T`.
+        decoded: T = _shape.decode(_loads(text), self._shape)
+        return decoded
 
 
 class _Loads:
     __slots__ = ()
 
-    def __getitem__[T](self, shape: _TypeForm[T]) -> _TypedLoads[T]:
+    def __getitem__[T](self, shape: TypeForm[T]) -> _TypedLoads[T]:
         return _TypedLoads(shape)
 
-    def __repr__(self) -> str:
-        return "sop.loads"
 
-
-def dumps(value: _Any) -> str:
+def dumps(value: Any) -> str:
     """Write a value as sop text.
 
-    The core writer already understands every sop value, so a value that came
-    from `loads` is written without touching Python.  Anything else -- a
-    dataclass, an enum, a set -- is spelled by the shape layer's `convert`,
-    one call per unrecognised object, inside the same single traversal.
+    The core writer already understands every value `loads` produces, so one
+    that came from `loads` is written without touching Python.  Anything else
+    -- a dataclass, an enum, a set, a `dict` or a `list` -- is spelled by the
+    shape layer's `convert`, one call per unrecognised object, inside the same
+    single traversal.
     """
     return _dumps(value, _shape.convert)
 

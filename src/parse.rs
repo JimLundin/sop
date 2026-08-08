@@ -236,40 +236,36 @@ impl<'a, 'py> Parser<'a, 'py> {
     fn parse_array(&mut self) -> PyResult<Py<PyAny>> {
         let (line, column) = (self.line, self.col);
         self.bump();
-        self.skip_ws()?;
-        match self.byte(0) {
-            None => return self.err_at("unterminated array", line, column),
-            Some(b']') => {
-                self.bump();
-                return Ok(PyTuple::empty(self.py).into_any().unbind());
-            }
-            Some(_) => {}
-        }
         let mut items: Vec<Py<PyAny>> = Vec::new();
         loop {
+            // Checked at the head of each element, so the empty array and a
+            // trailing comma are the same case, as in `parse_object`.
+            self.skip_ws()?;
+            match self.byte(0) {
+                None => return self.err_at("unterminated array", line, column),
+                Some(b']') => {
+                    self.bump();
+                    break;
+                }
+                Some(_) => {}
+            }
             items.push(self.parse_value(false)?);
             self.skip_ws()?;
             match self.byte(0) {
-                Some(b',') => {
-                    self.bump(); // a following ']' is a legal trailing comma
-                    self.skip_ws()?;
-                    match self.byte(0) {
-                        None => return self.err_at("unterminated array", line, column),
-                        Some(b']') => {}
-                        Some(_) => continue,
-                    }
+                Some(b',') => self.bump(),
+                Some(b']') => {
+                    self.bump();
+                    break;
                 }
-                Some(b']') => {}
                 None => return self.err_at("unterminated array", line, column),
                 Some(_) => {
                     return self.err(
                         "expected ',' or ']': only an identifier may be followed by a value",
                     );
                 }
-            }
-            self.bump(); // the ']'
-            return Ok(PyTuple::new(self.py, items)?.into_any().unbind());
+            };
         }
+        Ok(PyTuple::new(self.py, items)?.into_any().unbind())
     }
 
     fn parse_object(&mut self) -> PyResult<Py<PyAny>> {
@@ -414,25 +410,20 @@ impl<'a, 'py> Parser<'a, 'py> {
         if self.eof() {
             return self.err("unterminated escape sequence");
         }
-        let c = self.bump();
-        let simple = match c {
-            '"' => Some('"'),
-            '\\' => Some('\\'),
-            '/' => Some('/'),
-            'b' => Some('\u{8}'),
-            'f' => Some('\u{c}'),
-            'n' => Some('\n'),
-            'r' => Some('\r'),
-            't' => Some('\t'),
-            _ => None,
-        };
-        if let Some(c) = simple {
-            return Ok(c);
+        match self.bump() {
+            c @ ('"' | '\\' | '/') => Ok(c),
+            'b' => Ok('\u{8}'),
+            'f' => Ok('\u{c}'),
+            'n' => Ok('\n'),
+            'r' => Ok('\r'),
+            't' => Ok('\t'),
+            'u' => self.read_unicode_escape(),
+            c => self.err(format!("invalid escape sequence '\\{c}'")),
         }
-        if c != 'u' {
-            return self.err(format!("invalid escape sequence '\\{c}'"));
-        }
+    }
 
+    /// The `\uXXXX` body, a following low surrogate consumed with it.
+    fn read_unicode_escape(&mut self) -> PyResult<char> {
         let high = self.read_hex4()?;
         if (0xD800..=0xDBFF).contains(&high)
             && self.byte(0) == Some(b'\\')
@@ -452,9 +443,10 @@ impl<'a, 'py> Parser<'a, 'py> {
         // A `str` is well-formed UTF-8 and cannot hold an unpaired surrogate.
         // The alternative to rejecting one is substituting U+FFFD, which loses
         // data silently. Rejecting matches what serde_json does.
-        char::from_u32(high)
-            .map(Ok)
-            .unwrap_or_else(|| self.err(format!("unpaired surrogate escape U+{high:04X}")))
+        match char::from_u32(high) {
+            Some(c) => Ok(c),
+            None => self.err(format!("unpaired surrogate escape U+{high:04X}")),
+        }
     }
 
     fn read_hex4(&mut self) -> PyResult<u32> {

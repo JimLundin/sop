@@ -16,6 +16,21 @@ import pytest
 import sop
 
 # ---------------------------------------------------------------------------
+# Schemas used below
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Point:
+    __sop_tag__ = None
+    x: int
+
+
+class Iban(str):
+    __sop_tag__ = "iban"
+
+
+# ---------------------------------------------------------------------------
 # Host types: the SDK's decision, not the format's
 # ---------------------------------------------------------------------------
 
@@ -297,16 +312,6 @@ def test_depth_is_bounded_by_the_interpreter_not_the_sdk():
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class Point:
-    __sop_tag__ = None
-    x: int
-
-
-class Iban(str):
-    __sop_tag__ = "iban"
-
-
 def test_plain_values_take_the_fast_path():
     value = sop.loads[Any]('{a: [1, "x", Active], b: uuid "9f1c"}')
     assert sop.dumps(value) == '{a:[1,"x",Active],b:uuid "9f1c"}'
@@ -340,6 +345,22 @@ def test_a_tagged_subclass_of_a_builtin_keeps_its_tag():
     assert sop.dumps([Iban("DE89")]) == '[iban "DE89"]'
 
 
+def test_an_untagged_subclass_is_carried_as_what_it_is():
+    # A subclass that declared no tag is still a list or a dict, and is
+    # written as one -- which is how a subclass of `set` already behaved.
+    class Roles(list): ...
+
+    class Ordered(dict): ...
+
+    class Pair(tuple): ...
+
+    assert sop.dumps(Roles([1, 2])) == "[1,2]"
+    assert sop.dumps(Ordered(a=1)) == "{a:1}"
+    assert sop.dumps(Pair((1, 2))) == "[1,2]"
+    # A declared tag still wins: it is a tagged string, spelled with `str`.
+    assert sop.dumps(Iban("DE89")) == 'iban "DE89"'
+
+
 def test_a_runaway_value_is_an_error_not_a_crash():
     # The writer walks a value the caller built, which can nest arbitrarily or
     # cyclically. CPython's recursion guard turns that into RecursionError at
@@ -348,6 +369,12 @@ def test_a_runaway_value_is_an_error_not_a_crash():
     cycle.append(cycle)
     with pytest.raises(RecursionError):
         sop.dumps(cycle)
+    # A dict is frozen on the way out, so it takes a different route through
+    # the writer than a list and has to be guarded just as well.
+    loop: dict[str, object] = {}
+    loop["self"] = loop
+    with pytest.raises(RecursionError):
+        sop.dumps(loop)
 
 
 def test_a_lone_surrogate_has_no_spelling():
@@ -361,14 +388,6 @@ def test_a_lone_surrogate_has_no_spelling():
 # ---------------------------------------------------------------------------
 # The last uncovered corners
 # ---------------------------------------------------------------------------
-
-
-def test_repr_of_the_loaders():
-    assert repr(sop.loads) == "sop.loads"
-    assert repr(sop.loads[int]) == "sop.loads[int]"
-    assert repr(sop.loads[list[int]]) == "sop.loads[list[int]]"
-    assert repr(sop.loads[Point]) == "sop.loads[Point]"
-    assert repr(sop.loads[int | None]) == "sop.loads[int | None]"
 
 
 @pytest.mark.parametrize(

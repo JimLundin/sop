@@ -10,11 +10,10 @@ name = "_core"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.29.1", features = [] }
+pyo3 = "0.29.1"
 unicode-ident = "1.0.24"
 
 [features]
-default = []
 # Enabled only by maturin (see pyproject.toml); with it always on, plain
 # `cargo check` and `cargo test` fail to link against libpython.
 extension-module = ["pyo3/extension-module"]
