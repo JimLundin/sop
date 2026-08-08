@@ -55,13 +55,18 @@ the object does. There is no shapeless `loads` — `loads[Any]` is the escape
 hatch and it has to be written down.
 
 The two are not inverses and are not meant to be: `dumps` takes nearly any
-Python object, while untyped `loads` answers `Value` and nothing else. A
-`set` is written as an array and reads back as one unless a shape says
-`set[T]` — telling those apart is the shape's job, not the document's.
+Python object, while untyped `loads` answers `Value` and nothing else.
 
-`Value` names the closed set untyped reading can produce — `None | bool | int | float | str | Symbol | Tagged |
-tuple[Value, ...] | frozendict[str, Value]` — so `loads[Value]` is the same
-escape hatch with its result typed precisely.
+Every sequence is written in array notation, and carries a tag saying what it
+was — `Set [ ... ]`, `Roles [ ... ]` — so the shape of the data stays legible
+even where nothing can read it back. `list` and `tuple` carry none: they
+*are* the format's array.
+
+`Value` is the core's own name for the closed set untyped reading can
+produce — `None | bool | int | float | str | Symbol | Tagged | tuple[Value,
+...] | frozendict[str, Value]` — so `loads[Value]` is the same escape hatch
+with its result typed precisely. It is defined by the extension module, which
+is what produces and accepts it, not by the layer above.
 
 Everything read is immutable — not so that reading and writing mirror each
 other, but so that what you are handed cannot change under you. Mutation is
@@ -140,8 +145,8 @@ the wire. That is a schema decision and it belongs to the schema.
 | `@dataclass class X` | an object, or `X { ... }` if the class is tagged |
 | `list[T]` | an array |
 | `tuple[T, ...]` | an array, like `list[T]`, read back immutable |
-| `set[T]` | an array, like `list[T]`, read back without order or duplicates |
-| `frozenset[T]` | an array, like `set[T]`, read back immutable |
+| `set[T]` | `Set [ ... ]` — an array tagged with what it was |
+| `frozenset[T]` | `Set [ ... ]`, like `set[T]`, read back immutable |
 | `dict[str, V]` | an object with uniform values |
 | `frozendict[str, V]` | an object, like `dict[str, V]`, read back immutable |
 | `X \| None` | the value, or the symbol `null` |
@@ -149,7 +154,8 @@ the wire. That is a schema decision and it belongs to the schema.
 | `Enum` | a symbol, matched on its spelling |
 | a class with `__sop_tag__` | `Tag "…"`, built with `cls(text)`, spelled with `str(obj)` |
 | `str` | a string, never a symbol |
-| `sop.Tagged` | any tagged value, tag preserved |
+| `sop.Tagged[V]` | a tagged value whose payload has shape `V`, tag preserved |
+| `sop.Tagged` | the same with `V` defaulted — any payload |
 | `Any` | whatever was there |
 
 Number kind is spelling-determined — digits alone denote an integer, a point
@@ -169,8 +175,11 @@ the interpreter's own limit rather than a limit of the SDK's.
 
 The format has no booleans and no null. `true`, `false` and `null` are
 ordinary symbols on the wire; mapping them onto `True`, `False` and `None` is
-the SDK's decision, made in the parser. `Symbol` and `Tagged` are native types and
-validate on construction: a symbol must be an identifier, `Symbol("null")` is
+the SDK's decision, made in the parser. `Tagged` is generic in what it carries — `Tagged[int]` reads
+`Retries 3` — and defaults to `Tagged[Value]`, which is what reading
+produces. There is deliberately no bound on the parameter: the writer builds
+a `Tagged[object]` whose payload is still unconverted. `Symbol` and `Tagged`
+are native types and validate on construction: a symbol must be an identifier, `Symbol("null")` is
 refused because `null` already has a spelling on this side, and a `Tagged`
 cannot hold `None`, a bool or a `Symbol` — a tag cannot be applied to a bare
 symbol, so such a value could never be written or read back. Those two say so
@@ -222,8 +231,16 @@ maturin develop --release                      # build into the active venv
 uv pip install .                               # or: the wheel, via maturin build
 pytest                                         # tests + branch coverage, 100% enforced
 ruff check --fix . && ruff format .            # lint and format
-mypy && pyright                                # both strict; configured in pyproject.toml
+mypy                                           # strict; the gate, configured in pyproject.toml
+pyright                                        # strict too, but advisory (see below)
 ```
+
+mypy is the gate. pyright is configured and worth running, but it is
+advisory for now: its PEP 747 `TypeForm` support does not yet accept a union
+(`sop.loads[Order | None]` is reported as an error at the call site) and it
+resolves `type[T]` to `object`'s constructor, so the shape layer's own
+generics read as errors to it. Bending the code to suit that would cost more
+than it buys.
 
 Coverage: 100% branch on the Python package, enforced by pytest itself
 (`--cov-fail-under=100`); the Rust implementation is exercised end to end by

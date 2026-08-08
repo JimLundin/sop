@@ -16,7 +16,7 @@ TYPED_RESPONSE = """{
   balance: Decimal "19.99",
   session_ttl: Duration "PT15M",
   location: Geo { lat: 47.6062, lng: -122.3321 },
-  roles: ["admin", "beta"],
+  roles: Set ["admin", "beta"],
   status: Active,
   deleted_at: null,
 }"""
@@ -27,7 +27,7 @@ TYPED_RESPONSE_OUT = (
     'balance:Decimal "19.99",'
     'session_ttl:Duration "PT15M",'
     "location:Geo {lat:47.6062,lng:-122.3321},"
-    'roles:["admin","beta"],'
+    'roles:Set ["admin","beta"],'
     "status:Active,deleted_at:null}"
 )
 

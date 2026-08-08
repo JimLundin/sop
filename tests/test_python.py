@@ -203,7 +203,7 @@ def test_loads_needs_a_shape():
 def test_value_names_the_untyped_result():
     # `Value` is the closed set untyped reading produces, so reading through
     # it changes nothing about the result.
-    text = '{a: [1, "x", Active], b: Uuid "9f1c", c: null, d: [true, 1.5], e: Bag [2]}'
+    text = '{a: [1, "x", Active], b: Uuid "9f1c", c: null, d: [true, 1.5], e: Set [2]}'
     assert sop.loads[sop.Value](text) == sop.loads[Any](text)
 
 
@@ -345,18 +345,19 @@ def test_a_tagged_subclass_of_a_builtin_keeps_its_tag():
     assert sop.dumps([Iban("DE89")]) == '[Iban "DE89"]'
 
 
-def test_an_untagged_subclass_is_carried_as_what_it_is():
-    # A subclass that declared no tag is still a list or a dict, and is
-    # written as one -- which is how a subclass of `set` already behaved.
+def test_a_subclass_is_carried_as_what_it_is():
+    # A subclass is still a list, a dict or a tuple and is written as one --
+    # under its own name, so what the data was stays visible.  Only the
+    # builtins the format spells natively go untagged.
     class Roles(list): ...
 
     class Ordered(dict): ...
 
     class Pair(tuple): ...
 
-    assert sop.dumps(Roles([1, 2])) == "[1,2]"
+    assert sop.dumps(Roles([1, 2])) == "Roles [1,2]"
+    assert sop.dumps(Pair((1, 2))) == "Pair [1,2]"
     assert sop.dumps(Ordered(a=1)) == "{a:1}"
-    assert sop.dumps(Pair((1, 2))) == "[1,2]"
     # A declared tag still wins: it is a tagged string, spelled with `str`.
     assert sop.dumps(Iban("DE89")) == 'Iban "DE89"'
 

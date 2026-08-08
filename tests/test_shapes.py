@@ -144,38 +144,42 @@ def test_unsupported_shape():
 
 
 # ---------------------------------------------------------------------------
-# set: an array whose order the shape says is not meaningful
+# set: an array that says what it was
 # ---------------------------------------------------------------------------
 
 
-def test_set_reads_an_array():
-    assert sop.loads[set[str]]('["a", "b"]') == {"a", "b"}
+def test_set_reads_a_tagged_array():
+    assert sop.loads[set[str]]('Set ["a", "b"]') == {"a", "b"}
 
 
-def test_set_rejects_a_tagged_array():
-    # A tag is a constructor, and nothing here constructs a set: the shape
-    # does, on this side.
-    with pytest.raises(sop.ShapeError, match="expected an array"):
+def test_set_rejects_a_bare_array():
+    # Every sequence spells as an array, so the tag is what tells them apart.
+    with pytest.raises(sop.ShapeError, match="tagged `Set`"):
+        sop.loads[set[str]]('["a"]')
+
+
+def test_set_rejects_another_tag():
+    with pytest.raises(sop.ShapeError, match="tagged `Set`"):
         sop.loads[set[str]]('Bag ["a"]')
 
 
 def test_list_rejects_a_tagged_array():
     with pytest.raises(sop.ShapeError, match="expected an array"):
-        sop.loads[list[str]]('Bag ["a"]')
+        sop.loads[list[str]]('Set ["a"]')
 
 
 def test_set_of_the_wrong_element_type():
     with pytest.raises(sop.ShapeError, match="expected an integer"):
-        sop.loads[set[int]]('["a"]')
+        sop.loads[set[int]]('Set ["a"]')
 
 
 def test_empty_set():
-    assert sop.loads[set[int]]("[]") == set()
-    assert sop.dumps(set()) == "[]"
+    assert sop.loads[set[int]]("Set []") == set()
+    assert sop.dumps(set()) == "Set []"
 
 
-def test_set_writes_an_array():
-    assert sop.dumps({"a"}) == '["a"]'
+def test_set_writes_a_tagged_array():
+    assert sop.dumps({"a"}) == 'Set ["a"]'
 
 
 def test_set_output_is_deterministic():
@@ -186,7 +190,9 @@ def test_set_output_is_deterministic():
 
 
 def test_frozenset_writes_the_same_way():
-    assert sop.dumps(frozenset({"a"})) == '["a"]'
+    # The wire says unordered; whether the Python value can be mutated is the
+    # shape's business, exactly as with `list[T]` and `tuple[T, ...]`.
+    assert sop.dumps(frozenset({"a"})) == 'Set ["a"]'
 
 
 @pytest.mark.parametrize("value", [set(), {1}, {1, 2, 3}, {"a", "b"}])
@@ -205,15 +211,22 @@ def test_set_inside_a_dataclass():
         __sop_tag__ = None
         roles: set[str]
 
-    assert sop.loads[Holder]('{roles: ["admin"]}') == Holder({"admin"})
-    assert sop.dumps(Holder({"admin"})) == '{roles:["admin"]}'
+    assert sop.loads[Holder]('{roles: Set ["admin"]}') == Holder({"admin"})
+    assert sop.dumps(Holder({"admin"})) == '{roles:Set ["admin"]}'
 
 
-def test_a_set_and_a_list_read_the_same_array():
-    # Untyped reading cannot tell them apart, and is not meant to: the shape
-    # is what says whether order and duplicates matter.
-    assert sop.loads[list[int]]("[1,2]") == [1, 2]
-    assert sop.loads[set[int]]("[1,2]") == {1, 2}
+def test_a_sequence_carries_the_tag_of_what_it_was():
+    # Every sequence spells as an array; the tag is how you can still see what
+    # the data was.  `list` and `tuple` are the format's own array and carry
+    # none, which is why a plain array stays plain.
+    class Roles(list): ...
+
+    class Tags(set): ...
+
+    assert sop.dumps([1, 2]) == "[1,2]"
+    assert sop.dumps((1, 2)) == "[1,2]"
+    assert sop.dumps(Roles([1, 2])) == "Roles [1,2]"
+    assert sop.dumps(Tags({1})) == "Tags [1]"
 
 
 # ---------------------------------------------------------------------------
@@ -257,8 +270,8 @@ def test_tuples_are_written_as_arrays():
     assert sop.dumps((1, 2)) == "[1,2]"
 
 
-def test_frozenset_reads_an_array_immutably():
-    value = sop.loads[frozenset[str]]('["a", "b"]')
+def test_frozenset_reads_a_tagged_array_immutably():
+    value = sop.loads[frozenset[str]]('Set ["a", "b"]')
     assert value == frozenset({"a", "b"}) and isinstance(value, frozenset)
     assert roundtrip(frozenset[str], frozenset({"a", "b"})) == {"a", "b"}
 
@@ -416,6 +429,28 @@ def test_tagged_scalar_reports_a_bad_value():
         sop.loads[Money]('Decimal "not a number"')
 
 
+def test_a_tagged_shape_reads_its_payload():
+    # `Tagged` is generic in what it carries, so the payload has a shape too.
+    value = sop.loads[sop.Tagged[int]]("Retries 3")
+    assert (value.tag, value.value) == ("Retries", 3)
+    assert roundtrip(sop.Tagged[int], value) == value
+
+
+def test_a_tagged_shape_checks_its_payload():
+    with pytest.raises(sop.ShapeError, match="expected an integer"):
+        sop.loads[sop.Tagged[int]]('Retries "3"')
+
+
+def test_a_tagged_shape_rejects_an_untagged_value():
+    with pytest.raises(sop.ShapeError, match="expected a tagged value"):
+        sop.loads[sop.Tagged[int]]("3")
+
+
+def test_a_bare_tagged_shape_takes_any_payload():
+    # Undecorated, `Tagged` means `Tagged[Value]` -- whatever was there.
+    assert sop.loads[sop.Tagged]('Duration "PT15M"').value == "PT15M"
+
+
 def test_unknown_tags_survive_as_Tagged():
     # Nothing in the schema models `Duration`, and it still round-trips.
     value = sop.loads[sop.Tagged]('Duration "PT15M"')
@@ -510,6 +545,20 @@ def test_a_recursive_shape_resolves():
     tree = sop.loads[Branch]('Branch { name: "root", children: [Branch { name: "leaf" }] }')
     assert tree.children[0].name == "leaf"
     assert sop.loads[Branch](sop.dumps(tree)) == tree
+
+
+def test_a_bare_none_is_the_same_shape_as_nonetype():
+    # An annotation may evaluate to either; they name one shape.
+    assert sop.loads[None]("null") is None
+    assert sop.loads[type(None)]("null") is None
+
+
+def test_a_parameterised_shape_with_no_reading_is_refused():
+    # `Sequence[int]` is a real type but no row of the shape table reads it.
+    from collections.abc import Sequence
+
+    with pytest.raises(sop.ShapeError, match="unsupported shape"):
+        sop.loads[Sequence[int]]("[1]")
 
 
 def test_an_exotic_alias_is_not_a_shape():
@@ -645,7 +694,7 @@ TYPED_RESPONSE = """{
   balance: Decimal "19.99",
   session_ttl: Duration "PT15M",
   location: Geo { lat: 47.6062, lng: -122.3321 },
-  roles: ["admin", "beta"],
+  roles: Set ["admin", "beta"],
   status: Active,
   deleted_at: null,
 }"""

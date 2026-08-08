@@ -32,7 +32,7 @@ use std::sync::OnceLock;
 use pyo3::create_exception;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyBool;
+use pyo3::types::{PyBool, PyGenericAlias, PyType};
 
 create_exception!(_core, SopError, PyValueError);
 
@@ -115,8 +115,8 @@ impl Symbol {
     }
 }
 
-/// A tag applied to a payload. Tags are constructive: a tagged value is never
-/// equal to the value it wraps.
+/// A tag applied to a payload, generic in what it carries: `Tagged[V]`. Tags
+/// are constructive: a tagged value is never equal to the value it wraps.
 ///
 /// Frozen, like `Symbol`: the native types are immutable. Equality and
 /// hashing behave as a frozen dataclass's would — equal by `(tag, value)`,
@@ -161,6 +161,16 @@ impl Tagged {
 
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
         Ok(format!("Tagged({:?}, {})", self.tag, self.value.bind(py).repr()?))
+    }
+
+    /// `Tagged[V]`, so a payload's type can be named in a shape as well as in
+    /// the stubs -- `loads[Tagged[str]]` reads a tag over a string.
+    #[classmethod]
+    fn __class_getitem__<'py>(
+        cls: &Bound<'py, PyType>,
+        item: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyGenericAlias>> {
+        PyGenericAlias::new(cls.py(), cls.as_any(), item)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {

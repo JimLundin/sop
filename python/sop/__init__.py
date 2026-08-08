@@ -36,7 +36,7 @@ The format itself is implemented once, in Rust (`sop._core`).  There is no
 pure-Python parser and no fallback.
 """
 
-from typing import Any, TypeForm
+from typing import TypeForm
 
 from . import _shape
 from ._core import SopError, Symbol, Tagged
@@ -66,7 +66,7 @@ class _Loads:
         return _TypedLoads(shape)
 
 
-def dumps(value: Any) -> str:
+def dumps(value: object) -> str:
     """Write a value as sop text.
 
     The core writer already understands every value `loads` produces, so one
