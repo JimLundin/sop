@@ -25,19 +25,19 @@ class Colour(enum.Enum):
 
 
 class Iban(str):
-    __sop_tag__ = "iban"
+    __sop_tag__ = "Iban"
 
 
 class Money(Decimal):
-    __sop_tag__ = "decimal"
+    __sop_tag__ = "Decimal"
 
 
 class Id(UUID):
-    __sop_tag__ = "uuid"
+    __sop_tag__ = "Uuid"
 
 
 class Instant(datetime):
-    __sop_tag__ = "instant"
+    __sop_tag__ = "Instant"
 
     @classmethod
     def __sop_parse__(cls, text: str) -> Instant:
@@ -56,10 +56,15 @@ class Bare:
 
 
 @dataclass
-class Geo:
-    __sop_tag__ = "geo"
+class Geo:  # the convention is the default: carried as `Geo`
     lat: float
     lng: float
+
+
+@dataclass
+class Renamed:
+    __sop_tag__ = "Other"  # a tag that is not the class's own name
+    x: int
 
 
 @dataclass
@@ -139,41 +144,38 @@ def test_unsupported_shape():
 
 
 # ---------------------------------------------------------------------------
-# set: a tagged array, which is a different value from a bare array
+# set: an array whose order the shape says is not meaningful
 # ---------------------------------------------------------------------------
 
 
-def test_set_reads_a_tagged_array():
-    assert sop.loads[set[str]]('set ["a", "b"]') == {"a", "b"}
+def test_set_reads_an_array():
+    assert sop.loads[set[str]]('["a", "b"]') == {"a", "b"}
 
 
-def test_set_rejects_a_bare_array():
-    with pytest.raises(sop.ShapeError, match="tagged `set`"):
-        sop.loads[set[str]]('["a"]')
-
-
-def test_set_rejects_another_tag():
-    with pytest.raises(sop.ShapeError, match="tagged `set`"):
-        sop.loads[set[str]]('bag ["a"]')
+def test_set_rejects_a_tagged_array():
+    # A tag is a constructor, and nothing here constructs a set: the shape
+    # does, on this side.
+    with pytest.raises(sop.ShapeError, match="expected an array"):
+        sop.loads[set[str]]('Bag ["a"]')
 
 
 def test_list_rejects_a_tagged_array():
     with pytest.raises(sop.ShapeError, match="expected an array"):
-        sop.loads[list[str]]('set ["a"]')
+        sop.loads[list[str]]('Bag ["a"]')
 
 
 def test_set_of_the_wrong_element_type():
     with pytest.raises(sop.ShapeError, match="expected an integer"):
-        sop.loads[set[int]]('set ["a"]')
+        sop.loads[set[int]]('["a"]')
 
 
 def test_empty_set():
-    assert sop.loads[set[int]]("set []") == set()
-    assert sop.dumps(set()) == "set []"
+    assert sop.loads[set[int]]("[]") == set()
+    assert sop.dumps(set()) == "[]"
 
 
-def test_set_writes_a_tagged_array():
-    assert sop.dumps({"a"}) == 'set ["a"]'
+def test_set_writes_an_array():
+    assert sop.dumps({"a"}) == '["a"]'
 
 
 def test_set_output_is_deterministic():
@@ -184,7 +186,7 @@ def test_set_output_is_deterministic():
 
 
 def test_frozenset_writes_the_same_way():
-    assert sop.dumps(frozenset({"a"})) == 'set ["a"]'
+    assert sop.dumps(frozenset({"a"})) == '["a"]'
 
 
 @pytest.mark.parametrize("value", [set(), {1}, {1, 2, 3}, {"a", "b"}])
@@ -203,8 +205,15 @@ def test_set_inside_a_dataclass():
         __sop_tag__ = None
         roles: set[str]
 
-    assert sop.loads[Holder]('{roles: set ["admin"]}') == Holder({"admin"})
-    assert sop.dumps(Holder({"admin"})) == '{roles:set ["admin"]}'
+    assert sop.loads[Holder]('{roles: ["admin"]}') == Holder({"admin"})
+    assert sop.dumps(Holder({"admin"})) == '{roles:["admin"]}'
+
+
+def test_a_set_and_a_list_read_the_same_array():
+    # Untyped reading cannot tell them apart, and is not meant to: the shape
+    # is what says whether order and duplicates matter.
+    assert sop.loads[list[int]]("[1,2]") == [1, 2]
+    assert sop.loads[set[int]]("[1,2]") == {1, 2}
 
 
 # ---------------------------------------------------------------------------
@@ -248,8 +257,8 @@ def test_tuples_are_written_as_arrays():
     assert sop.dumps((1, 2)) == "[1,2]"
 
 
-def test_frozenset_reads_a_tagged_array_immutably():
-    value = sop.loads[frozenset[str]]('set ["a", "b"]')
+def test_frozenset_reads_an_array_immutably():
+    value = sop.loads[frozenset[str]]('["a", "b"]')
     assert value == frozenset({"a", "b"}) and isinstance(value, frozenset)
     assert roundtrip(frozenset[str], frozenset({"a", "b"})) == {"a", "b"}
 
@@ -331,8 +340,8 @@ def test_none_opts_out_of_the_tag():
 
 
 def test_an_explicit_tag_overrides_the_name():
-    assert sop.loads[Geo]("geo { lat: 1, lng: 2 }") == Geo(1.0, 2.0)
-    assert sop.dumps(Geo(1.0, 2.0)) == "geo {lat:1.0,lng:2.0}"
+    assert sop.loads[Renamed]("Other { x: 1 }") == Renamed(1)
+    assert sop.dumps(Renamed(1)) == "Other {x:1}"
 
 
 def test_a_tagged_class_rejects_a_bare_object():
@@ -365,17 +374,17 @@ def test_builtins_do_not_get_a_default_tag():
 
 
 def test_tagged_scalar_is_built_from_its_text():
-    assert sop.loads[Iban]('iban "DE89"') == "DE89"
-    assert isinstance(sop.loads[Iban]('iban "DE89"'), Iban)
+    assert sop.loads[Iban]('Iban "DE89"') == "DE89"
+    assert isinstance(sop.loads[Iban]('Iban "DE89"'), Iban)
 
 
 def test_tagged_scalar_is_spelled_with_str():
-    assert sop.dumps(Iban("DE89")) == 'iban "DE89"'
-    assert sop.dumps(Money("19.99")) == 'decimal "19.99"'
+    assert sop.dumps(Iban("DE89")) == 'Iban "DE89"'
+    assert sop.dumps(Money("19.99")) == 'Decimal "19.99"'
 
 
 def test_sop_parse_hook():
-    value = sop.loads[Instant]('instant "2026-08-05T14:23:11"')
+    value = sop.loads[Instant]('Instant "2026-08-05T14:23:11"')
     assert value.year == 2026 and isinstance(value, Instant)
 
 
@@ -393,25 +402,25 @@ def test_tagged_scalar_roundtrip(shape, value):
 
 
 def test_tagged_scalar_rejects_the_wrong_tag():
-    with pytest.raises(sop.ShapeError, match="tagged `iban`"):
-        sop.loads[Iban]('swift "DE89"')
+    with pytest.raises(sop.ShapeError, match="tagged `Iban`"):
+        sop.loads[Iban]('Swift "DE89"')
 
 
 def test_tagged_scalar_rejects_a_non_string_payload():
     with pytest.raises(sop.ShapeError, match="carries a string"):
-        sop.loads[Iban]("iban 1")
+        sop.loads[Iban]("Iban 1")
 
 
 def test_tagged_scalar_reports_a_bad_value():
     with pytest.raises(sop.ShapeError, match="is not valid"):
-        sop.loads[Money]('decimal "not a number"')
+        sop.loads[Money]('Decimal "not a number"')
 
 
 def test_unknown_tags_survive_as_Tagged():
-    # Nothing in the schema models `duration`, and it still round-trips.
-    value = sop.loads[sop.Tagged]('duration "PT15M"')
-    assert (value.tag, value.value) == ("duration", "PT15M")
-    assert sop.dumps(value) == 'duration "PT15M"'
+    # Nothing in the schema models `Duration`, and it still round-trips.
+    value = sop.loads[sop.Tagged]('Duration "PT15M"')
+    assert (value.tag, value.value) == ("Duration", "PT15M")
+    assert sop.dumps(value) == 'Duration "PT15M"'
 
 
 def test_a_class_without_a_declared_tag_is_not_a_scalar():
@@ -440,7 +449,7 @@ def test_optional():
 
 def test_tagged_union_discriminates_on_the_tag():
     events = sop.loads[list[Deposit | Withdraw]](
-        '[Deposit { amount: decimal "5.00" }, Withdraw { atm: "A1" }]'
+        '[Deposit { amount: Decimal "5.00" }, Withdraw { atm: "A1" }]'
     )
     assert isinstance(events[0], Deposit) and isinstance(events[1], Withdraw)
 
@@ -467,7 +476,7 @@ def test_untagged_union_reports_every_reason():
 
 def test_mixed_union():
     assert sop.loads[Deposit | int]("7") == 7
-    assert isinstance(sop.loads[Deposit | int]('Deposit { amount: decimal "1" }'), Deposit)
+    assert isinstance(sop.loads[Deposit | int]('Deposit { amount: Decimal "1" }'), Deposit)
 
 
 def test_a_shared_tag_in_a_union_is_an_error():
@@ -475,15 +484,15 @@ def test_a_shared_tag_in_a_union_is_an_error():
     # members in order would hide it until the members diverged.
     @dataclass
     class One:
-        __sop_tag__ = "dup"
+        __sop_tag__ = "Dup"
         x: int
 
     @dataclass
     class Two:
-        __sop_tag__ = "dup"
+        __sop_tag__ = "Dup"
         y: int
 
-    with pytest.raises(sop.ShapeError, match="share the tag `dup`"):
+    with pytest.raises(sop.ShapeError, match="share the tag `Dup`"):
         sop.loads[One | Two]("dup {x: 1}")
 
 
@@ -513,7 +522,7 @@ def test_kind_matched_members_do_not_discriminate():
     # Enums are carried as symbols, and `Tagged` and `Any` match on kind, so
     # none of them is a wire tag the union can key on.
     assert sop.loads[Colour | Plain]("azul") is Colour.Blue
-    assert sop.loads[Plain | sop.Tagged]('duration "PT15M"').tag == "duration"
+    assert sop.loads[Plain | sop.Tagged]('Duration "PT15M"').tag == "Duration"
     assert sop.loads[Plain | Any]("7") == 7
 
 
@@ -595,7 +604,7 @@ def test_field_names_are_written_with_their_alias():
     "shape, text, path",
     [
         (dict[str, list[int]], '{a: [1, "x"]}', "$.a[1]"),
-        (list[Geo], "[geo {lat: 1, lng: Active}]", "$[0].lng"),
+        (list[Geo], "[Geo {lat: 1, lng: Active}]", "$[0].lng"),
         (dict[str, dict[str, int]], "{a: {b: Active}}", "$.a.b"),
         (list[int], '["x"]', "$[0]"),
         (Fields, "{}", "$"),
@@ -631,12 +640,12 @@ class Account:
 
 
 TYPED_RESPONSE = """{
-  id: uuid "9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234",
-  created_at: instant "2026-08-05T14:23:11Z",
-  balance: decimal "19.99",
-  session_ttl: duration "PT15M",
-  location: geo { lat: 47.6062, lng: -122.3321 },
-  roles: set ["admin", "beta"],
+  id: Uuid "9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234",
+  created_at: Instant "2026-08-05T14:23:11Z",
+  balance: Decimal "19.99",
+  session_ttl: Duration "PT15M",
+  location: Geo { lat: 47.6062, lng: -122.3321 },
+  roles: ["admin", "beta"],
   status: Active,
   deleted_at: null,
 }"""
@@ -650,7 +659,7 @@ def test_a_typed_api_response():
     assert account.roles == {"admin", "beta"}
     assert account.status is Status.Active
     assert account.deleted_at is None
-    assert account.session_ttl.tag == "duration"  # an unmodelled tag survives
+    assert account.session_ttl.tag == "Duration"  # an unmodelled tag survives
     assert roundtrip(Account, account) == account
 
 
@@ -660,7 +669,7 @@ class Reversal:
 
 
 DISCRIMINATED_UNION = """[
-  Deposit  { amount: decimal "500.00" },
+  Deposit  { amount: Decimal "500.00" },
   Withdraw { atm: "ATM-4417" },
   Reversal { reason: Suspended },
 ]"""
@@ -674,20 +683,17 @@ def test_a_discriminated_union():
 
 @dataclass
 class Tcp:
-    __sop_tag__ = "tcp"
     host: str
     port: int
 
 
 @dataclass
 class Unix:
-    __sop_tag__ = "unix"
     path: str
 
 
 @dataclass
 class Service:
-    __sop_tag__ = "service"
     name: str
     listen: list[Tcp | Unix]
     replicas: int
@@ -695,11 +701,11 @@ class Service:
     labels: dict[str, str] = field(default_factory=dict)
 
 
-CONFIGURATION = """service {
+CONFIGURATION = """Service {
   name: "billing-api",
   listen: [
-    tcp { host: "0.0.0.0", port: 8080 },
-    unix { path: "/var/run/billing.sock" },
+    Tcp { host: "0.0.0.0", port: 8080 },
+    Unix { path: "/var/run/billing.sock" },
   ],
   replicas: 3,
   canary: false,

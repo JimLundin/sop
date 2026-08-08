@@ -52,13 +52,21 @@ text = sop.dumps(order)
 
 Reading takes a shape because text carries no type; writing does not, because
 the object does. There is no shapeless `loads` — `loads[Any]` is the escape
-hatch and it has to be written down. `Value` names the closed set untyped
-reading can produce — `None | bool | int | float | str | Symbol | Tagged |
+hatch and it has to be written down.
+
+The two are not inverses and are not meant to be: `dumps` takes nearly any
+Python object, while untyped `loads` answers `Value` and nothing else. A
+`set` is written as an array and reads back as one unless a shape says
+`set[T]` — telling those apart is the shape's job, not the document's.
+
+`Value` names the closed set untyped reading can produce — `None | bool | int | float | str | Symbol | Tagged |
 tuple[Value, ...] | frozendict[str, Value]` — so `loads[Value]` is the same
 escape hatch with its result typed precisely.
 
-Everything read is immutable. Mutation is opt-in: a shape such as `list[T]`
-or `dict[str, V]` declares it, and the decoded result is freshly built.
+Everything read is immutable — not so that reading and writing mirror each
+other, but so that what you are handed cannot change under you. Mutation is
+opt-in: a shape such as `list[T]` or `dict[str, V]` declares it, and the
+decoded result is freshly built.
 Writing accepts the mutable counterparts — `dict`, `list`, `set` — and spells
 them identically; the core knows only the immutable set, so those are frozen
 by the shape layer on the way out, and a value that came from `loads` is
@@ -72,6 +80,8 @@ The subscript is annotated `TypeForm[T]` (PEP 747), so shapes that are not
 classes work too — `sop.loads[Order | None](text)` reveals as `Order | None`,
 which the older `type[T]` spelling could never express.
 
+A tag is a constructor, and constructors are spelled in PascalCase — which
+is what a class's own name already is, so the default needs no declaration.
 A class is carried under its own name unless it says otherwise:
 
 ```python
@@ -87,7 +97,7 @@ class Account:
 
 
 class Iban(str):
-    __sop_tag__ = "iban"  # carried as `iban "DE89…"`
+    __sop_tag__ = "Iban"  # carried as `Iban "DE89…"`
 
 
 Event = Deposit | Withdraw | Reversal
@@ -107,15 +117,15 @@ be built from its own spelling supplies `__sop_parse__`:
 
 ```python
 class Money(Decimal):
-    __sop_tag__ = "decimal"
+    __sop_tag__ = "Decimal"
 
 
 class Id(UUID):
-    __sop_tag__ = "uuid"
+    __sop_tag__ = "Uuid"
 
 
 class Instant(datetime):
-    __sop_tag__ = "instant"
+    __sop_tag__ = "Instant"
 
     @classmethod
     def __sop_parse__(cls, text):
@@ -130,14 +140,14 @@ the wire. That is a schema decision and it belongs to the schema.
 | `@dataclass class X` | an object, or `X { ... }` if the class is tagged |
 | `list[T]` | an array |
 | `tuple[T, ...]` | an array, like `list[T]`, read back immutable |
-| `set[T]` | `set [ ... ]` — a *tagged* array, not a bare one |
-| `frozenset[T]` | `set [ ... ]`, like `set[T]`, read back immutable |
+| `set[T]` | an array, like `list[T]`, read back without order or duplicates |
+| `frozenset[T]` | an array, like `set[T]`, read back immutable |
 | `dict[str, V]` | an object with uniform values |
 | `frozendict[str, V]` | an object, like `dict[str, V]`, read back immutable |
 | `X \| None` | the value, or the symbol `null` |
 | `A \| B \| C` | a discriminated union, keyed on the tag |
 | `Enum` | a symbol, matched on its spelling |
-| a class with `__sop_tag__` | `tag "…"`, built with `cls(text)`, spelled with `str(obj)` |
+| a class with `__sop_tag__` | `Tag "…"`, built with `cls(text)`, spelled with `str(obj)` |
 | `str` | a string, never a symbol |
 | `sop.Tagged` | any tagged value, tag preserved |
 | `Any` | whatever was there |
@@ -170,11 +180,13 @@ unable to hold a value the parser could never produce, so the writer is total
 and Python `==` is the only comparison you need. Comparing Python objects is
 Python's business.
 
-Throughput is machine-dependent; on one box, `loads` runs at ~35 MB/s and
-`dumps` of what it produced at ~40 MB/s, the cost dominated by the Python
-objects involved either way. Writing a plain `dict` or `list` is slower —
-each one costs a hop through `convert` and the frozen copy it returns — which
-is the price of the writer having one entrance rather than two.
+Throughput is machine-dependent and dominated by the Python objects involved
+either way; on one box `loads` runs in the tens of MB/s. The one ratio worth
+knowing is stable: a `dict` or `list` costs about **3x** what the same data
+costs as a `frozendict` or `tuple`, because each container takes a hop
+through `convert` and the frozen copy it returns. That is the price of the
+writer having one entrance instead of two, and it is only paid by values the
+writer did not produce.
 
 ## Layout
 

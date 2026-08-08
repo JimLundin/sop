@@ -27,7 +27,7 @@ class Point:
 
 
 class Iban(str):
-    __sop_tag__ = "iban"
+    __sop_tag__ = "Iban"
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +203,7 @@ def test_loads_needs_a_shape():
 def test_value_names_the_untyped_result():
     # `Value` is the closed set untyped reading produces, so reading through
     # it changes nothing about the result.
-    text = '{a: [1, "x", Active], b: uuid "9f1c", c: null, d: [true, 1.5], e: set [2]}'
+    text = '{a: [1, "x", Active], b: Uuid "9f1c", c: null, d: [true, 1.5], e: Bag [2]}'
     assert sop.loads[sop.Value](text) == sop.loads[Any](text)
 
 
@@ -313,8 +313,8 @@ def test_depth_is_bounded_by_the_interpreter_not_the_sdk():
 
 
 def test_plain_values_take_the_fast_path():
-    value = sop.loads[Any]('{a: [1, "x", Active], b: uuid "9f1c"}')
-    assert sop.dumps(value) == '{a:[1,"x",Active],b:uuid "9f1c"}'
+    value = sop.loads[Any]('{a: [1, "x", Active], b: Uuid "9f1c"}')
+    assert sop.dumps(value) == '{a:[1,"x",Active],b:Uuid "9f1c"}'
 
 
 def test_a_typed_object_is_converted():
@@ -340,9 +340,9 @@ def test_a_tag_cannot_wrap_a_value_that_spells_as_a_symbol():
 def test_a_tagged_subclass_of_a_builtin_keeps_its_tag():
     # `Iban` is a `str`, so a writer matching builtins loosely would drop the
     # tag and emit a bare string.
-    assert sop.dumps(Iban("DE89")) == 'iban "DE89"'
-    assert sop.dumps({"iban": Iban("DE89")}) == '{iban:iban "DE89"}'
-    assert sop.dumps([Iban("DE89")]) == '[iban "DE89"]'
+    assert sop.dumps(Iban("DE89")) == 'Iban "DE89"'
+    assert sop.dumps({"iban": Iban("DE89")}) == '{iban:Iban "DE89"}'
+    assert sop.dumps([Iban("DE89")]) == '[Iban "DE89"]'
 
 
 def test_an_untagged_subclass_is_carried_as_what_it_is():
@@ -358,7 +358,7 @@ def test_an_untagged_subclass_is_carried_as_what_it_is():
     assert sop.dumps(Ordered(a=1)) == "{a:1}"
     assert sop.dumps(Pair((1, 2))) == "[1,2]"
     # A declared tag still wins: it is a tagged string, spelled with `str`.
-    assert sop.dumps(Iban("DE89")) == 'iban "DE89"'
+    assert sop.dumps(Iban("DE89")) == 'Iban "DE89"'
 
 
 def test_a_runaway_value_is_an_error_not_a_crash():
@@ -397,7 +397,7 @@ def test_a_lone_surrogate_has_no_spelling():
         ("true", "the symbol `true`"),
         ("false", "the symbol `false`"),
         ("Active", "the symbol `Active`"),
-        ('uuid "x"', "a value tagged `uuid`"),
+        ('Uuid "x"', "a value tagged `Uuid`"),
         ('"x"', "a string"),
         ("1", "a number"),
         ("[]", "an array"),

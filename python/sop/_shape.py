@@ -1,18 +1,20 @@
 """How Python types map onto sop values.
 
-A class is carried under its own name unless it says otherwise:
+A tag is a constructor, and constructors are spelled in PascalCase -- which a
+class's own name already is, so the default needs no declaration.  A class is
+carried under its own name unless it says otherwise:
 
     class Deposit:                                         ->  Deposit { ... }
-    class Geo:      __sop_tag__ = "geo"                    ->  geo { ... }
     class Account:  __sop_tag__ = None                     ->  { ... }
-    class Iban(str):__sop_tag__ = "iban"                   ->  iban "DE89…"
+    class Ledger:   __sop_tag__ = "Book"                   ->  Book { ... }
+    class Iban(str):__sop_tag__ = "Iban"                   ->  Iban "DE89…"
 
 A tagged dataclass is a tagged object; anything else with a tag is a tagged
 string, built with `cls(text)` and spelled with `str(obj)`.  A type that cannot
 be built from its own spelling supplies `__sop_parse__`:
 
     class Instant(datetime):
-        __sop_tag__ = "instant"
+        __sop_tag__ = "Instant"
         @classmethod
         def __sop_parse__(cls, text): return cls.fromisoformat(text)
 
@@ -31,7 +33,8 @@ import enum
 import functools
 import types
 import typing
-from typing import Any, TypeForm, get_args, get_origin
+from collections.abc import Iterable, Set
+from typing import Any, TypeForm, TypeIs, get_args, get_origin
 
 from ._core import SopError, Symbol, Tagged
 
@@ -45,8 +48,10 @@ result typed precisely; `loads[Any]` reads the same way and types the result
 as `Any`.  Kept in step with the alias in `_core.pyi`."""
 
 type Shape = TypeForm[Any] | None
-"""A type used as a schema: anything `TypeForm` accepts, and the bare `None`
-an annotation such as `deleted_at: None` evaluates to."""
+"""A type used as a schema, as the dispatcher below sees it: anything
+`TypeForm` accepts, plus the bare `None` that reaches it from `loads[None]`
+or from a `type X = None` alias.  `decode` is generic over `TypeForm[T]`
+instead; this is the internal, already-dynamic form."""
 
 
 class ShapeError(SopError):
@@ -63,17 +68,35 @@ class ShapeError(SopError):
         self.column = 0
 
 
-# A set is written `set ["admin", "beta"]` -- a tag applied to an array, and a
-# tagged value is never equal to its payload, so `list[str]` and `set[str]` are
-# different shapes rather than two spellings of one.
-_SET_TAG = "set"
-
-
-def _freeze(mapping: dict[str, Any]) -> frozendict[str, Any]:
-    """The immutable counterpart of a mapping just built.  Spelled as a merge
-    onto an empty frozendict because neither checker's bundled stubs can yet
-    resolve `frozendict(mapping)`."""
+def _freeze[K, V](mapping: dict[K, V]) -> frozendict[K, V]:
+    """The immutable counterpart of a mapping just built, carrying its key and
+    value types through.  Spelled as a merge onto an empty frozendict because
+    neither checker's bundled stubs can yet resolve `frozendict(mapping)`."""
     return frozendict() | mapping
+
+
+def _is_class(shape: object) -> TypeIs[type[Any]]:
+    """Whether a shape is a class, and so is asked what kind of class it is."""
+    return isinstance(shape, type)
+
+
+def _is_object(obj: object) -> TypeIs[dict[Any, Any]]:
+    """Whether a value is written as an object.  A `dict` exactly: a mapping
+    that is not one has no declared spelling, and `frozendict` is the writer's
+    own business."""
+    return isinstance(obj, dict)
+
+
+# Both of these are written as arrays; they are asked apart only because a
+# value with no order of its own has to be given one first.
+def _is_ordered(obj: object) -> TypeIs[Iterable[Any]]:
+    """Whether a value is a run of values in a meaningful order."""
+    return isinstance(obj, (list, tuple))
+
+
+def _is_unordered(obj: object) -> TypeIs[Set[Any]]:
+    """Whether a value is a run of values whose order carries no meaning."""
+    return isinstance(obj, (set, frozenset))
 
 
 @functools.cache
@@ -92,18 +115,6 @@ def _tag_of(shape: object) -> str | None:
     # Asked after the tag is in hand: an enum is carried as a symbol, and
     # `Symbol` and `Tagged` match on kind, so none of the three names a tag.
     return None if issubclass(shape, (enum.Enum, Symbol, Tagged)) else tag
-
-
-def _class_of(obj: object) -> type[object]:
-    """`type(obj)`, asked of an `object` rather than of an `Any`, so that what
-    comes back is a class the checkers know."""
-    return type(obj)
-
-
-def _as_class(shape: object) -> type[object] | None:
-    """The shape as a class, or `None` if it is not one.  Asked of an `object`
-    for the same reason as `_class_of`."""
-    return shape if isinstance(shape, type) else None
 
 
 def _scalar_tag(cls: type) -> str | None:
@@ -167,13 +178,22 @@ def _describe(value: Value) -> str:
 # ---------------------------------------------------------------------------
 
 
-def decode(value: Value, shape: Shape, path: str = "$") -> Any:
+def decode[T](value: Value, shape: TypeForm[T], path: str = "$") -> T:
     """Read a parsed value back as `shape`, raising `ShapeError` -- naming the
-    path -- for anything that does not fit."""
+    path -- for anything that does not fit.
+
+    The shape is the type: what comes back is a `T` because `shape` said so.
+    This is the one place the dynamic answer below is read as a static one."""
+    decoded: T = _decode(value, shape, path)
+    return decoded
+
+
+def _decode(value: Value, shape: Shape, path: str = "$") -> Any:
+    """One step of `decode`, dispatching on what kind of shape it was given."""
     if isinstance(shape, typing.TypeAliasType):
         # A `type X = ...` alias -- the SDK's own `Value` included -- denotes
         # its right-hand side.
-        return decode(value, shape.__value__, path)
+        return _decode(value, shape.__value__, path)
 
     # The shapes with a fixed spelling in the format, matched by identity.
     match shape:
@@ -212,25 +232,25 @@ def decode(value: Value, shape: Shape, path: str = "$") -> Any:
         case types.UnionType, members:
             return _union(value, members, path)
         case builtins.list, (item,):
-            return [decode(v, item, f"{path}[{i}]") for i, v in enumerate(_array(value, path))]
+            return [_decode(v, item, f"{path}[{i}]") for i, v in enumerate(_array(value, path))]
         case builtins.tuple, (item, builtins.Ellipsis):
-            return tuple(decode(v, item, f"{path}[{i}]") for i, v in enumerate(_array(value, path)))
+            return tuple(
+                _decode(v, item, f"{path}[{i}]") for i, v in enumerate(_array(value, path))
+            )
         case builtins.tuple, _:
             # `tuple[int, str]` is a row type, which a sop array does not model.
             raise ShapeError(
                 path, f"unsupported shape {shape!r}: only `tuple[T, ...]` reads an array"
             )
         case (builtins.set | builtins.frozenset) as origin, (item,):
-            if not isinstance(value, Tagged) or value.tag != _SET_TAG:
-                raise ShapeError(
-                    path, f"expected an array tagged `{_SET_TAG}`, found {_describe(value)}"
-                )
-            decoded = (decode(v, item, f"{path}[]") for v in _array(value.value, path))
+            # An array, like `list[T]`; the shape is what says the order is
+            # not meaningful and the members are unique.
+            decoded = (_decode(v, item, f"{path}[]") for v in _array(value, path))
             return set(decoded) if origin is set else frozenset(decoded)
         case (builtins.dict | builtins.frozendict) as origin, (builtins.str | typing.Any, item):
             if not isinstance(value, frozendict):
                 raise ShapeError(path, f"expected an object, found {_describe(value)}")
-            mapped = {k: decode(v, item, f"{path}.{k}") for k, v in value.items()}
+            mapped = {k: _decode(v, item, f"{path}.{k}") for k, v in value.items()}
             return mapped if origin is dict else _freeze(mapped)
         case ((builtins.dict | builtins.frozendict), _):
             # An object's keys are strings; a shape claiming otherwise would
@@ -240,7 +260,8 @@ def decode(value: Value, shape: Shape, path: str = "$") -> Any:
             pass  # not parameterised; the classes are below
 
     # The classes, matched on what they are rather than on a spelling.
-    if (cls := _as_class(shape)) is not None:
+    if _is_class(shape):
+        cls = shape
         if issubclass(cls, enum.Enum):
             return _decode_enum(value, cls, path)
         if cls is Symbol or cls is Tagged:
@@ -268,7 +289,7 @@ def _union(value: Value, members: tuple[Any, ...], path: str) -> Any:
         return None
     members = tuple(m for m in members if m is not types.NoneType)
     if len(members) == 1:
-        return decode(value, members[0], path)
+        return _decode(value, members[0], path)
 
     # A member's wire tag is the union's discriminant, and `_tag_of` names
     # exactly the members that are carried tagged.
@@ -292,18 +313,18 @@ def _union(value: Value, members: tuple[Any, ...], path: str) -> Any:
         if not isinstance(value, Tagged):
             raise ShapeError(path, f"expected a value tagged {expected}, found {_describe(value)}")
         if member := tagged.get(value.tag):
-            return decode(value, member, path)
+            return _decode(value, member, path)
         raise ShapeError(path, f"unknown tag `{value.tag}`; expected one of {expected}")
 
     # In a mixed union a recognised tag still decides; anything else tries
     # each member in order.
     if isinstance(value, Tagged) and (member := tagged.get(value.tag)):
-        return decode(value, member, path)
+        return _decode(value, member, path)
 
     reasons: list[str] = []
     for candidate in members:
         try:
-            return decode(value, candidate, path)
+            return _decode(value, candidate, path)
         except ShapeError as exc:
             reasons.append(exc.message)
     raise ShapeError(path, "no union member matched: " + "; ".join(reasons))
@@ -347,7 +368,7 @@ def _decode_dataclass(value: Value, shape: type, path: str) -> Any:
         if not field.init:
             continue
         if key in value:
-            kwargs[field.name] = decode(value[key], hints[field.name], f"{path}.{key}")
+            kwargs[field.name] = _decode(value[key], hints[field.name], f"{path}.{key}")
         elif field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING:
             raise ShapeError(path, f"missing key `{key}`")
     try:
@@ -363,7 +384,7 @@ def _decode_dataclass(value: Value, shape: type, path: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def convert(obj: Any) -> Any:
+def convert(obj: object) -> Any:
     """One step of writing: spell the head of an object the core cannot
     classify, leaving its children untouched.  The core calls this from inside
     its single traversal and continues in place, so the graph is walked
@@ -373,26 +394,24 @@ def convert(obj: Any) -> Any:
     counterparts are frozen here and spell identically.  Past that, precedence
     mirrors reading: an enum is a symbol, a dataclass is an object, and any
     other class with a tag is a tagged string spelled with `str(obj)`."""
-    # Every question is asked of the class.  A dataclass *class* handed to
-    # `dumps` is an instance of `type`, which is not a dataclass, so it falls
-    # through to the error rather than being spelled as its own fields.
-    cls = _class_of(obj)
-    if issubclass(cls, enum.Enum):
+    if isinstance(obj, enum.Enum):
         return Symbol(_enum_spelling(obj))
+    # Every remaining question is asked of the class.  A dataclass *class*
+    # handed to `dumps` is an instance of `type`, which is not a dataclass, so
+    # it falls through to the error rather than spelling its own fields.
+    cls = type(obj)
     if dataclasses.is_dataclass(cls):
         body = _freeze({key: getattr(obj, field.name) for field, key in _fields(cls)})
         tag = _tag_of(cls)
         return Tagged(tag, body) if tag else body
     if tag := _scalar_tag(cls):
         return Tagged(tag, str(obj))
-    # A subclass that declared no tag is still carried as what it is, which is
-    # how a subclass of `set` already behaved.  `tuple` is here for the same
-    # reason, so a named tuple is an array rather than an odd one out.
-    if issubclass(cls, (list, tuple)):
-        return tuple(obj)
-    if issubclass(cls, dict):
+    if _is_object(obj):
         return _freeze(obj)
-    if issubclass(cls, (set, frozenset)):
-        # Sorted so output is stable; sop arrays are ordered and sets are not.
-        return Tagged(_SET_TAG, tuple(sorted(obj, key=repr)))
+    if _is_unordered(obj):
+        # An array is ordered and a set is not, so one is chosen and kept to,
+        # or the same value would not write the same way twice.
+        return tuple(sorted(obj, key=repr))
+    if _is_ordered(obj):
+        return tuple(obj)
     raise ShapeError("$", f"cannot encode {cls.__name__}")

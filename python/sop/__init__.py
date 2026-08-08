@@ -52,14 +52,11 @@ class _TypedLoads[T]:
 
     __slots__ = ("_shape",)
 
-    def __init__(self, shape: _shape.Shape) -> None:
+    def __init__(self, shape: TypeForm[T]) -> None:
         self._shape = shape
 
     def __call__(self, text: str) -> T:
-        # Declared rather than cast: `decode` answers `Any`, and the shape it
-        # was given is what says the answer is a `T`.
-        decoded: T = _shape.decode(_loads(text), self._shape)
-        return decoded
+        return _shape.decode(_loads(text), self._shape)
 
 
 class _Loads:

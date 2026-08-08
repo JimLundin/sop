@@ -11,56 +11,56 @@ import pytest
 import sop
 
 TYPED_RESPONSE = """{
-  id: uuid "9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234",
-  created_at: instant "2026-08-05T14:23:11Z",
-  balance: decimal "19.99",
-  session_ttl: duration "PT15M",
-  location: geo { lat: 47.6062, lng: -122.3321 },
-  roles: set ["admin", "beta"],
+  id: Uuid "9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234",
+  created_at: Instant "2026-08-05T14:23:11Z",
+  balance: Decimal "19.99",
+  session_ttl: Duration "PT15M",
+  location: Geo { lat: 47.6062, lng: -122.3321 },
+  roles: ["admin", "beta"],
   status: Active,
   deleted_at: null,
 }"""
 
 TYPED_RESPONSE_OUT = (
-    '{id:uuid "9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234",'
-    'created_at:instant "2026-08-05T14:23:11Z",'
-    'balance:decimal "19.99",'
-    'session_ttl:duration "PT15M",'
-    "location:geo {lat:47.6062,lng:-122.3321},"
-    'roles:set ["admin","beta"],'
+    '{id:Uuid "9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234",'
+    'created_at:Instant "2026-08-05T14:23:11Z",'
+    'balance:Decimal "19.99",'
+    'session_ttl:Duration "PT15M",'
+    "location:Geo {lat:47.6062,lng:-122.3321},"
+    'roles:["admin","beta"],'
     "status:Active,deleted_at:null}"
 )
 
 DISCRIMINATED_UNION = """[
-  Deposit  { amount: decimal "500.00", from: iban "DE89370400440532013000" },
-  Withdraw { amount: decimal "20.00",  atm: "ATM-4417" },
-  Reversal { of: uuid "8c1d0a3e-...", reason: InsufficientFunds },
+  Deposit  { amount: Decimal "500.00", from: Iban "DE89370400440532013000" },
+  Withdraw { amount: Decimal "20.00",  atm: "ATM-4417" },
+  Reversal { of: Uuid "8c1d0a3e-...", reason: InsufficientFunds },
 ]"""
 
 DISCRIMINATED_UNION_OUT = (
-    '[Deposit {amount:decimal "500.00",from:iban "DE89370400440532013000"},'
-    'Withdraw {amount:decimal "20.00",atm:"ATM-4417"},'
-    'Reversal {of:uuid "8c1d0a3e-...",reason:InsufficientFunds}]'
+    '[Deposit {amount:Decimal "500.00",from:Iban "DE89370400440532013000"},'
+    'Withdraw {amount:Decimal "20.00",atm:"ATM-4417"},'
+    'Reversal {of:Uuid "8c1d0a3e-...",reason:InsufficientFunds}]'
 )
 
-CONFIGURATION = """service {
+CONFIGURATION = """Service {
   name: "billing-api",
   listen: [
-    tcp { host: "0.0.0.0", port: 8080 },
-    unix "/var/run/billing.sock",
+    Tcp { host: "0.0.0.0", port: 8080 },
+    Unix "/var/run/billing.sock",
   ],
 
-  // secret(env("..."))
-  db_password: secret env "BILLING_DB_PASSWORD",
+  // Secret(Env("..."))
+  db_password: Secret Env "BILLING_DB_PASSWORD",
 
   replicas: 3,
   canary: false,
 }"""
 
 CONFIGURATION_OUT = (
-    'service {name:"billing-api",'
-    'listen:[tcp {host:"0.0.0.0",port:8080},unix "/var/run/billing.sock"],'
-    'db_password:secret env "BILLING_DB_PASSWORD",'
+    'Service {name:"billing-api",'
+    'listen:[Tcp {host:"0.0.0.0",port:8080},Unix "/var/run/billing.sock"],'
+    'db_password:Secret Env "BILLING_DB_PASSWORD",'
     "replicas:3,canary:false}"
 )
 
@@ -84,11 +84,11 @@ VALID = [
     ("tag_named_true", 'true "x"', 'true "x"'),
     ("right_associative", "a b c 1", "a b c 1"),
     ("two_symbols", "[a, b]", "[a,b]"),
-    ("tag_on_array", 'set ["admin", "beta"]', 'set ["admin","beta"]'),
+    ("tag_on_array", 'Bag ["admin", "beta"]', 'Bag ["admin","beta"]'),
     (
         "nested_tag_object",
-        "geo { lat: 47.6062, lng: -122.3321 }",
-        "geo {lat:47.6062,lng:-122.3321}",
+        "Geo { lat: 47.6062, lng: -122.3321 }",
+        "Geo {lat:47.6062,lng:-122.3321}",
     ),
     ("leading_plus", "[+7]", "[7]"),
     ("negative_zero", "[-0]", "[0]"),
