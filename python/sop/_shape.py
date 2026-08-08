@@ -46,7 +46,15 @@ from typing import Any, TypeForm, TypeIs, get_args, get_origin
 from ._core import SopError, Symbol, Tagged
 
 type Value = (
-    None | bool | int | float | str | Symbol | Tagged | tuple[Value, ...] | frozendict[str, Value]
+    None
+    | bool
+    | int
+    | float
+    | str
+    | Symbol
+    | Tagged
+    | tuple[Value, ...]
+    | frozendict[str, Value]
 )
 """The value domain, which belongs to the core -- `_core.pyi` declares it, and
 `loads` is what produces it.
@@ -123,7 +131,7 @@ def _is_unordered(obj: object) -> TypeIs[Set[object]]:
 
 
 @functools.cache
-def _tag_of(cls: type) -> str | None:
+def _tag_of(cls: type[object]) -> str | None:
     """A class's wire tag: `__sop_tag__` if set, otherwise its own name.
     Setting it to `None` is how a class asks to be carried as a bare object.
 
@@ -181,7 +189,9 @@ def _hints(cls: type) -> dict[str, TypeForm[Any]]:
 def _fields(shape: type) -> tuple[tuple[dataclasses.Field[object], str], ...]:
     """Each field with its sop key, resolved once per class.  The key is what
     `metadata={"sop": "from"}` names, or the field's own name verbatim."""
-    return tuple((f, str(f.metadata.get("sop", f.name))) for f in dataclasses.fields(shape))
+    return tuple(
+        (f, str(f.metadata.get("sop", f.name))) for f in dataclasses.fields(shape)
+    )
 
 
 def _enum_spelling(member: enum.Enum) -> str:
@@ -251,7 +261,9 @@ def _decode(value: Value, shape: TypeForm[Any], path: str = "$") -> Any:
     raise ShapeError(path, f"unsupported shape {shape!r}")
 
 
-def _decode_parameterised(value: Value, shape: TypeForm[Any], origin: type, path: str) -> Any:
+def _decode_parameterised(
+    value: Value, shape: TypeForm[Any], origin: type, path: str
+) -> Any:
     """A shape built from another -- `list[T]`, `A | B` -- read by what it is
     built from and what it is built of.
 
@@ -262,10 +274,14 @@ def _decode_parameterised(value: Value, shape: TypeForm[Any], origin: type, path
         case types.UnionType, members:
             return _union(value, members, path)
         case builtins.list, (item,):
-            return [_decode(v, item, f"{path}[{i}]") for i, v in enumerate(_array(value, path))]
+            return [
+                _decode(v, item, f"{path}[{i}]")
+                for i, v in enumerate(_array(value, path))
+            ]
         case builtins.tuple, (item, builtins.Ellipsis):
             return tuple(
-                _decode(v, item, f"{path}[{i}]") for i, v in enumerate(_array(value, path))
+                _decode(v, item, f"{path}[{i}]")
+                for i, v in enumerate(_array(value, path))
             )
         case builtins.tuple, _:
             # `tuple[int, str]` is a row type, which a sop array does not model.
@@ -283,7 +299,9 @@ def _decode_parameterised(value: Value, shape: TypeForm[Any], origin: type, path
             return set(decoded) if origin is set else frozenset(decoded)
         case _, (item,) if origin is Tagged:
             if not isinstance(value, Tagged):
-                raise ShapeError(path, f"expected a tagged value, found {_describe(value)}")
+                raise ShapeError(
+                    path, f"expected a tagged value, found {_describe(value)}"
+                )
             return Tagged(value.tag, _decode(value.value, item, path))
         case ((builtins.dict | builtins.frozendict), (builtins.str | typing.Any, item)):
             if not isinstance(value, frozendict):
@@ -293,11 +311,13 @@ def _decode_parameterised(value: Value, shape: TypeForm[Any], origin: type, path
         case ((builtins.dict | builtins.frozendict), _):
             # An object's keys are strings; a shape claiming otherwise would
             # decode to something its own annotation contradicts.
-            raise ShapeError(path, f"unsupported shape {shape!r}: object keys are strings")
+            raise ShapeError(
+                path, f"unsupported shape {shape!r}: object keys are strings"
+            )
     raise ShapeError(path, f"unsupported shape {shape!r}")
 
 
-def _decode_plain(value: Value, cls: type, path: str) -> Any:
+def _decode_plain(value: Value, cls: type[object], path: str) -> Any:
     """A shape that is just a class, read by what kind of class it is."""
     match cls:
         case types.NoneType:
@@ -306,7 +326,9 @@ def _decode_plain(value: Value, cls: type, path: str) -> Any:
             return None
         case builtins.bool:
             if not isinstance(value, bool):
-                raise ShapeError(path, f"expected `true` or `false`, found {_describe(value)}")
+                raise ShapeError(
+                    path, f"expected `true` or `false`, found {_describe(value)}"
+                )
             return value
         case builtins.int:
             # bool subclasses int in Python; a sop boolean is a symbol.
@@ -384,7 +406,9 @@ def _union(value: Value, members: tuple[TypeForm[Any], ...], path: str) -> Any:
         # error rather than one failed attempt out of several.
         expected = ", ".join(f"`{t}`" for t in sorted(tagged))
         if not isinstance(value, Tagged):
-            raise ShapeError(path, f"expected a value tagged {expected}, found {_describe(value)}")
+            raise ShapeError(
+                path, f"expected a value tagged {expected}, found {_describe(value)}"
+            )
         if (chosen := tagged.get(value.tag)) is not None:
             return _decode(value, chosen, path)
         raise ShapeError(path, f"unknown tag `{value.tag}`; expected one of {expected}")
@@ -405,9 +429,13 @@ def _union(value: Value, members: tuple[TypeForm[Any], ...], path: str) -> Any:
 
 def _decode_scalar[T](value: Value, shape: type[T], tag: str, path: str) -> T:
     if not isinstance(value, Tagged) or value.tag != tag:
-        raise ShapeError(path, f"expected a value tagged `{tag}`, found {_describe(value)}")
+        raise ShapeError(
+            path, f"expected a value tagged `{tag}`, found {_describe(value)}"
+        )
     if not isinstance(value.value, str):
-        raise ShapeError(path, f"`{tag}` carries a string, found {_describe(value.value)}")
+        raise ShapeError(
+            path, f"`{tag}` carries a string, found {_describe(value.value)}"
+        )
     # The class builds itself from its own spelling unless it says otherwise.
     parse: Callable[[str], T] = getattr(shape, "__sop_parse__", shape)
     try:
@@ -433,7 +461,9 @@ def _decode_dataclass[T](value: Value, shape: type[T], path: str) -> T:
     cls: type = shape
     if tag := _tag_of(cls):
         if not isinstance(value, Tagged):
-            raise ShapeError(path, f"expected a value tagged `{tag}`, found {_describe(value)}")
+            raise ShapeError(
+                path, f"expected a value tagged `{tag}`, found {_describe(value)}"
+            )
         if value.tag != tag:
             raise ShapeError(path, f"expected tag `{tag}`, found `{value.tag}`")
         value = value.value
@@ -448,7 +478,10 @@ def _decode_dataclass[T](value: Value, shape: type[T], path: str) -> T:
             continue
         if key in value:
             kwargs[field.name] = _decode(value[key], hints[field.name], f"{path}.{key}")
-        elif field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING:
+        elif (
+            field.default is dataclasses.MISSING
+            and field.default_factory is dataclasses.MISSING
+        ):
             raise ShapeError(path, f"missing key `{key}`")
     try:
         return shape(**kwargs)
@@ -487,7 +520,9 @@ def convert(obj: object) -> Spelled:
     # it falls through to the error rather than spelling its own fields.
     cls = type(obj)
     if dataclasses.is_dataclass(cls):
-        body: dict[object, object] = {key: getattr(obj, f.name) for f, key in _fields(cls)}
+        body: dict[object, object] = {
+            key: getattr(obj, f.name) for f, key in _fields(cls)
+        }
         tag = _tag_of(cls)
         return Tagged(tag, frozendict(body)) if tag else frozendict(body)
     if tag := _scalar_tag(cls):
@@ -503,7 +538,9 @@ def convert(obj: object) -> Spelled:
     raise ShapeError("$", f"cannot encode {cls.__name__}")
 
 
-def _spell_array[T](items: Iterable[T], cls: type) -> Tagged[tuple[T, ...]] | tuple[T, ...]:
+def _spell_array[T](
+    items: Iterable[T], cls: type
+) -> Tagged[tuple[T, ...]] | tuple[T, ...]:
     """A run of values as an array, tagged with what it was unless it is the
     format's own array already."""
     spelled = tuple(items)
