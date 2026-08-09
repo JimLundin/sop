@@ -511,7 +511,9 @@ def test_untagged_union_reports_every_reason():
 
 def test_mixed_union():
     assert sop.loads[Deposit | int]("7") == 7
-    assert isinstance(sop.loads[Deposit | int]('Deposit { amount: Decimal "1" }'), Deposit)
+    assert isinstance(
+        sop.loads[Deposit | int]('Deposit { amount: Decimal "1" }'), Deposit
+    )
 
 
 def test_a_union_member_that_is_not_a_class_names_no_tag():
@@ -549,7 +551,9 @@ def test_null_in_a_wider_union():
 
 
 def test_a_recursive_shape_resolves():
-    tree = sop.loads[Branch]('Branch { name: "root", children: [Branch { name: "leaf" }] }')
+    tree = sop.loads[Branch](
+        'Branch { name: "root", children: [Branch { name: "leaf" }] }'
+    )
     assert tree.children[0].name == "leaf"
     assert sop.loads[Branch](sop.dumps(tree)) == tree
 

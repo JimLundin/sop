@@ -99,7 +99,11 @@ VALID = [
     ("fraction", "[0.5,1.25]", "[0.5,1.25]"),
     ("tenth", "[0.1]", "[0.1]"),
     ("beyond_double_precision", "[9007199254740993]", "[9007199254740993]"),
-    ("big_integer", "123456789012345678901234567890", "123456789012345680000000000000.0"),
+    (
+        "big_integer",
+        "123456789012345678901234567890",
+        "123456789012345680000000000000.0",
+    ),
     ("beyond_i64", "9223372036854775808", "9223372036854776000.0"),
     ("large_float", "[1e30]", "[1000000000000000000000000000000.0]"),
     ("small_float", "[1.5e-5]", "[0.000015]"),
@@ -178,14 +182,16 @@ INVALID = [
 ]
 
 
-@pytest.mark.parametrize("src, expected", [c[1:] for c in VALID], ids=[c[0] for c in VALID])
-def test_valid(src, expected):
+@pytest.mark.parametrize(
+    "src, expected", [c[1:] for c in VALID], ids=[c[0] for c in VALID]
+)
+def test_valid(src: str, expected: str) -> None:
     value = sop.loads[Any](src)
     assert sop.dumps(value) == expected
     assert sop.loads[Any](expected) == value
 
 
 @pytest.mark.parametrize("src", [c[1] for c in INVALID], ids=[c[0] for c in INVALID])
-def test_invalid(src):
+def test_invalid(src: str) -> None:
     with pytest.raises(sop.SopError):
         sop.loads[Any](src)

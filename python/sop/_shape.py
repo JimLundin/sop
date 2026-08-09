@@ -396,8 +396,7 @@ def _union(value: Value, members: tuple[TypeForm[Any], ...], path: str) -> Any:
         # union keys on -- `list[int]` and `Any` among them.
         if not _is_class(member):
             continue
-        cls: type = member  # hashable, as the cached lookup requires
-        if name := _tag_of(cls):
+        if name := _tag_of(member):
             if name in tagged:
                 # A shared discriminant is a schema bug; falling back to
                 # trying members in order would hide it until it bit.

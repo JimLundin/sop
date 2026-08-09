@@ -9,7 +9,7 @@ that a uniform generator reaches only by luck.
 import enum
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeForm
 
 import pytest
 import sop
@@ -86,31 +86,31 @@ def _thaw(value: Any) -> Any:
 
 
 @given(values)
-def test_a_value_survives_a_round_trip(value):
+def test_a_value_survives_a_round_trip(value: sop.Value) -> None:
     assert sop.loads[Any](sop.dumps(value)) == value
 
 
 @given(values)
-def test_value_is_total_over_untyped_reading(value):
+def test_value_is_total_over_untyped_reading(value: sop.Value) -> None:
     # Everything untyped reading can produce fits the `Value` shape.
     assert sop.loads[sop.Value](sop.dumps(value)) == value
 
 
 @given(values)
-def test_writing_is_a_fixed_point(value):
+def test_writing_is_a_fixed_point(value: sop.Value) -> None:
     once = sop.dumps(value)
     assert sop.dumps(sop.loads[Any](once)) == once
 
 
 @given(values)
-def test_mutable_counterparts_write_identically(value):
+def test_mutable_counterparts_write_identically(value: sop.Value) -> None:
     # dict, list and their nested mixtures spell exactly as their immutable
     # counterparts; only reading is immutable-only.
     assert sop.dumps(_thaw(value)) == sop.dumps(value)
 
 
 @given(values.filter(_taggable))
-def test_a_tag_is_not_transparent(value):
+def test_a_tag_is_not_transparent(value: sop.Value) -> None:
     # A tagged value is never equal to its payload.
     assert sop.Tagged("t", value) != value
 
@@ -121,7 +121,7 @@ def test_a_tag_is_not_transparent(value):
 
 
 @given(st.text(max_size=60))
-def test_arbitrary_text_never_crashes(text):
+def test_arbitrary_text_never_crashes(text: str) -> None:
     try:
         sop.loads[Any](text)
     except sop.SopError:
@@ -134,7 +134,7 @@ def test_arbitrary_text_never_crashes(text):
         max_size=40,
     )
 )
-def test_parser_shaped_noise_never_crashes(text):
+def test_parser_shaped_noise_never_crashes(text: str) -> None:
     # Drawn from the characters that carry meaning, so far more of these reach
     # deep into the parser than uniform text would.
     try:
@@ -185,7 +185,9 @@ class Iban(str):
         (dict[str, int], st.dictionaries(st.text(max_size=6), integers, max_size=5)),
         (
             dict[str, list[int]],
-            st.dictionaries(st.text(max_size=6), st.lists(integers, max_size=3), max_size=3),
+            st.dictionaries(
+                st.text(max_size=6), st.lists(integers, max_size=3), max_size=3
+            ),
         ),
         (int | None, st.none() | integers),
         (Colour, st.sampled_from(Colour)),
@@ -195,17 +197,18 @@ class Iban(str):
         (
             list[Point | Named],
             st.lists(
-                st.builds(Point, integers, floats) | st.builds(Named, st.text(max_size=6)),
+                st.builds(Point, integers, floats)
+                | st.builds(Named, st.text(max_size=6)),
                 max_size=4,
             ),
         ),
         (sop.Tagged, st.builds(sop.Tagged, identifiers, st.text(max_size=8))),
     ],
 )
-def test_typed_round_trip(shape, strategy):
+def test_typed_round_trip(shape: TypeForm[Any], strategy):
     @given(strategy)
     @settings(max_examples=150, deadline=None)
-    def check(value):
+    def check(value: sop.Value) -> None:
         assert sop.loads[shape](sop.dumps(value)) == value
 
     check()
@@ -217,18 +220,18 @@ def test_typed_round_trip(shape, strategy):
 
 
 @given(integers)
-def test_integers_are_exact_in_range(value):
+def test_integers_are_exact_in_range(value: sop.Value) -> None:
     assert sop.loads[int](sop.dumps(value)) == value
 
 
 @given(st.integers(min_value=2**63) | st.integers(max_value=-(2**63) - 1))
-def test_integers_out_of_range_are_refused(value):
+def test_integers_out_of_range_are_refused(value: sop.Value) -> None:
     with pytest.raises(sop.SopError, match="out of range"):
         sop.dumps(value)
 
 
 @given(floats)
-def test_floats_keep_their_value(value):
+def test_floats_keep_their_value(value: sop.Value) -> None:
     # Including the sign of zero: a float's spelling always carries a point
     # or an exponent, so nothing is folded into an integer on the way out.
     read = sop.loads[float](sop.dumps(value))
@@ -236,14 +239,14 @@ def test_floats_keep_their_value(value):
 
 
 @given(floats)
-def test_a_float_reads_back_as_a_float(value):
+def test_a_float_reads_back_as_a_float(value: sop.Value) -> None:
     # Number kind is spelling-determined and writing preserves it.
     read = sop.loads[Any](sop.dumps(value))
     assert isinstance(read, float) and read == value
 
 
 @given(st.sampled_from([math.inf, -math.inf, math.nan]))
-def test_non_finite_floats_have_no_spelling(value):
+def test_non_finite_floats_have_no_spelling(value: sop.Value) -> None:
     with pytest.raises(sop.SopError, match="no sop representation"):
         sop.dumps(value)
 
@@ -254,7 +257,7 @@ def test_non_finite_floats_have_no_spelling(value):
 
 
 @given(identifiers | st.text(max_size=10))
-def test_symbol_accepts_exactly_the_identifiers(name):
+def test_symbol_accepts_exactly_the_identifiers(name: str):
     try:
         symbol = sop.Symbol(name)
     except ValueError:
@@ -265,7 +268,9 @@ def test_symbol_accepts_exactly_the_identifiers(name):
 
 
 @given(identifiers | st.text(max_size=10), integers)
-def test_tagged_accepts_exactly_the_identifier_tags(tag, payload):
+def test_tagged_accepts_exactly_the_identifier_tags(
+    tag: str, payload: sop.Value
+) -> None:
     try:
         tagged = sop.Tagged(tag, payload)
     except ValueError:
