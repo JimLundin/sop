@@ -1,0 +1,2 @@
+# `CPython` is a proper noun in prose, not an item to be backticked.
+doc-valid-idents = ["CPython", ".."]

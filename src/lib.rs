@@ -60,9 +60,9 @@ pub(crate) fn ser_error(message: String) -> PyErr {
 pub(crate) struct Recursion;
 
 impl Recursion {
-    pub(crate) fn enter(py: Python<'_>, task: &'static std::ffi::CStr) -> PyResult<Recursion> {
+    pub(crate) fn enter(py: Python<'_>, task: &'static std::ffi::CStr) -> PyResult<Self> {
         match unsafe { pyo3::ffi::Py_EnterRecursiveCall(task.as_ptr()) } {
-            0 => Ok(Recursion),
+            0 => Ok(Self),
             _ => Err(PyErr::fetch(py)),
         }
     }
@@ -103,7 +103,7 @@ impl Symbol {
                 "{name:?} is not an identifier, so it cannot be a symbol"
             )));
         }
-        Ok(Symbol { name })
+        Ok(Self { name })
     }
 
     fn __repr__(&self) -> String {
@@ -152,11 +152,18 @@ impl Tagged {
                 "a tag cannot be applied to a bare symbol, so Tagged cannot hold {what}"
             )));
         }
-        Ok(Tagged { tag, value: value.unbind() })
+        Ok(Self {
+            tag,
+            value: value.unbind(),
+        })
     }
 
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
-        Ok(format!("Tagged({:?}, {})", self.tag, self.value.bind(py).repr()?))
+        Ok(format!(
+            "Tagged({:?}, {})",
+            self.tag,
+            self.value.bind(py).repr()?
+        ))
     }
 
     /// `Tagged[V]`, so a payload's type can be named in a shape as well as in
@@ -170,7 +177,7 @@ impl Tagged {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-        let Ok(other) = other.cast::<Tagged>() else {
+        let Ok(other) = other.cast::<Self>() else {
             // A tagged value is never equal to its payload. `NotImplemented`
             // rather than `False`, so the other operand gets its say;
             // comparison beyond these types is Python's business.
@@ -185,6 +192,9 @@ impl Tagged {
     /// payload's own hash keeps the contract with `__eq__`: equal values hash
     /// equal, and an unhashable payload makes the whole value unhashable
     /// rather than quietly hashable by identity.
+    // Truncating on a 32-bit target and wrapping into the sign bit are both
+    // fine: a hash only has to be deterministic and agree with `__eq__`.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
         let mut hasher = DefaultHasher::new();
         self.tag.hash(&mut hasher);

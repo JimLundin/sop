@@ -8,7 +8,7 @@
 //! anything that measures the source in code points.
 //!
 //! Descent is recursive, guarded by CPython's own recursion check: past the
-//! interpreter's limit `loads` raises RecursionError — the interpreter's
+//! interpreter's limit `loads` raises `RecursionError` — the interpreter's
 //! bound, not one of ours — exactly as `dumps` is bounded when writing.
 
 use std::collections::HashMap;
@@ -61,7 +61,7 @@ impl<'a, 'py> Parser<'a, 'py> {
     // -- cursor -------------------------------------------------------------
 
     #[inline]
-    fn eof(&self) -> bool {
+    const fn eof(&self) -> bool {
         self.pos >= self.bytes.len()
     }
 
@@ -100,7 +100,10 @@ impl<'a, 'py> Parser<'a, 'py> {
             }
             return b as char;
         }
-        let c = self.src[self.pos..].chars().next().expect("on a char boundary");
+        let c = self.src[self.pos..]
+            .chars()
+            .next()
+            .expect("on a char boundary");
         self.pos += c.len_utf8();
         if is_line_terminator(c) {
             self.line += 1;
@@ -210,7 +213,10 @@ impl<'a, 'py> Parser<'a, 'py> {
                     && starts_value(c)
                 {
                     let value = self.parse_value(true)?;
-                    let tagged = Tagged { tag: name.to_owned(), value };
+                    let tagged = Tagged {
+                        tag: name.to_owned(),
+                        value,
+                    };
                     return Ok(Py::new(self.py, tagged)?.into_any());
                 }
                 // A bare symbol cannot be a tag's payload. Without this,
@@ -226,7 +232,13 @@ impl<'a, 'py> Parser<'a, 'py> {
                     "true" => PyBool::new(self.py, true).to_owned().into_any().unbind(),
                     "false" => PyBool::new(self.py, false).to_owned().into_any().unbind(),
                     "null" => self.py.None(),
-                    name => Py::new(self.py, Symbol { name: name.to_owned() })?.into_any(),
+                    name => Py::new(
+                        self.py,
+                        Symbol {
+                            name: name.to_owned(),
+                        },
+                    )?
+                    .into_any(),
                 })
             }
             c => self.err(format!("unexpected character {c:?}")),
@@ -259,9 +271,8 @@ impl<'a, 'py> Parser<'a, 'py> {
                 }
                 None => return self.err_at("unterminated array", line, column),
                 Some(_) => {
-                    return self.err(
-                        "expected ',' or ']': only an identifier may be followed by a value",
-                    );
+                    return self
+                        .err("expected ',' or ']': only an identifier may be followed by a value");
                 }
             };
         }
@@ -287,7 +298,8 @@ impl<'a, 'py> Parser<'a, 'py> {
             let key = self.parse_key()?;
             self.skip_ws()?;
             if self.byte(0) != Some(b':') {
-                return self.err("expected ':' after an object key (tags on keys are not permitted)");
+                return self
+                    .err("expected ':' after an object key (tags on keys are not permitted)");
             }
             self.bump();
             self.skip_ws()?;
@@ -307,13 +319,14 @@ impl<'a, 'py> Parser<'a, 'py> {
                 }
                 None => return self.err_at("unterminated object", line, column),
                 Some(_) => {
-                    return self.err(
-                        "expected ',' or '}': only an identifier may be followed by a value",
-                    );
+                    return self
+                        .err("expected ',' or '}': only an identifier may be followed by a value");
                 }
             }
         }
-        Ok(PyFrozenDict::from_sequence(map.as_any())?.into_any().unbind())
+        Ok(PyFrozenDict::from_sequence(map.as_any())?
+            .into_any()
+            .unbind())
     }
 
     // -- identifiers and keys -----------------------------------------------
@@ -367,7 +380,7 @@ impl<'a, 'py> Parser<'a, 'py> {
             // Fast path: copy the longest run of plain ASCII in one go.
             let run_start = self.pos;
             while let Some(b) = self.byte(0) {
-                if b >= 0x20 && b < 0x80 && b != b'"' && b != b'\\' {
+                if (0x20..0x80).contains(&b) && b != b'"' && b != b'\\' {
                     self.pos += 1;
                 } else {
                     break;
@@ -465,7 +478,7 @@ impl<'a, 'py> Parser<'a, 'py> {
 
     fn parse_number(&mut self) -> PyResult<Py<PyAny>> {
         let start = self.pos;
-        if matches!(self.byte(0), Some(b'+') | Some(b'-')) {
+        if matches!(self.byte(0), Some(b'+' | b'-')) {
             self.bump();
         }
 
@@ -493,10 +506,10 @@ impl<'a, 'py> Parser<'a, 'py> {
             self.eat_digits();
         }
 
-        if matches!(self.byte(0), Some(b'e') | Some(b'E')) {
+        if matches!(self.byte(0), Some(b'e' | b'E')) {
             self.bump();
             exact = false;
-            if matches!(self.byte(0), Some(b'+') | Some(b'-')) {
+            if matches!(self.byte(0), Some(b'+' | b'-')) {
                 self.bump();
             }
             if !self.byte(0).is_some_and(|b| b.is_ascii_digit()) {

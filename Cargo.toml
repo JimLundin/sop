@@ -21,3 +21,10 @@ unicode-ident = "1.0.24"
 # Enabled only by maturin (see pyproject.toml); with it always on, plain
 # `cargo check` and `cargo test` fail to link against libpython.
 extension-module = ["pyo3/extension-module"]
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# `err_at` and `refuse_tagged_symbol` take `&self` to read as methods next to
+# the siblings they delegate for; as associated functions they would only add
+# a type name at every call site.
+unused_self = "allow"

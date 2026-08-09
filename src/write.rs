@@ -87,8 +87,11 @@ pub(crate) struct Writer<'a, 'py> {
 }
 
 impl<'a, 'py> Writer<'a, 'py> {
-    pub(crate) fn new(convert: &'a Bound<'py, PyAny>) -> Self {
-        Writer { out: String::new(), convert }
+    pub(crate) const fn new(convert: &'a Bound<'py, PyAny>) -> Self {
+        Writer {
+            out: String::new(),
+            convert,
+        }
     }
 
     /// Spell a Python value.

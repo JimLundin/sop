@@ -6,11 +6,11 @@ use std::fmt::Write as _;
 /// U+000B and U+000C are whitespace but not line terminators, so they do not
 /// end a line comment.
 #[inline]
-pub(crate) fn is_line_terminator(c: char) -> bool {
+pub(crate) const fn is_line_terminator(c: char) -> bool {
     matches!(c, '\n' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}')
 }
 
-/// ECMAScript `IdentifierName`, via `unicode-ident`'s XID_Start/XID_Continue.
+/// ECMAScript `IdentifierName`, via `unicode-ident`'s `XID_Start`/`XID_Continue`.
 #[inline]
 pub(crate) fn is_id_start(c: char) -> bool {
     if c.is_ascii() {
