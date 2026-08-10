@@ -163,6 +163,16 @@ impl Symbol {
     fn __repr__(&self) -> String {
         format!("Symbol({:?})", self.name)
     }
+
+    /// Rebuilt by calling the class with the argument it was built from, so
+    /// `copy`, `deepcopy` and `pickle` all work. Every other value the
+    /// reader produces already does, and one that is handed to a worker
+    /// process and cannot come back is one the caller never gets to read.
+    /// Going back through the constructor is also what re-checks the name,
+    /// so a hostile pickle cannot mint a `Symbol("null")`.
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> (Bound<'py, PyType>, (String,)) {
+        (slf.get_type(), (slf.get().name.clone(),))
+    }
 }
 
 /// A tag applied to a payload, generic in what it carries: `Tagged[V]`. Tags
@@ -218,6 +228,18 @@ impl Tagged {
             self.tag,
             self.value.bind(py).repr()?
         ))
+    }
+
+    /// As `Symbol`, and for the same reasons. `deepcopy` copies the payload
+    /// because it is one of the arguments the value is rebuilt from.
+    fn __reduce__<'py>(
+        slf: &Bound<'py, Self>,
+    ) -> (Bound<'py, PyType>, (String, Bound<'py, PyAny>)) {
+        let this = slf.get();
+        (
+            slf.get_type(),
+            (this.tag.clone(), this.value.bind(slf.py()).clone()),
+        )
     }
 
     /// `Tagged[V]`, so a payload's type can be named in a shape as well as in

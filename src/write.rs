@@ -16,7 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyFloat, PyFrozenDict, PyFrozenDictMethods, PyInt, PyString, PyTuple};
 
 use crate::text::{escape_string, is_identifier, write_f64};
-use crate::{Recursion, ShapeError, SopError, Symbol, Tagged, ser_error};
+use crate::{Recursion, SopError, Symbol, Tagged, ser_error};
 
 /// What kind of sop value an object is, and the object itself.
 ///
@@ -38,18 +38,22 @@ enum Classified<'py> {
 
 /// Classify a Python object as a sop value.
 ///
-/// The builtin cases are matched on the *exact* type. A subclass may carry a
-/// tag — `class Iban(str)` is written `iban "DE89"` — and treating it as a
-/// plain string here would drop the tag silently. `None` is a type the writer
-/// does not know, which the SDK's `convert` hook may spell.
+/// Every case is matched on the *exact* type. A subclass may carry a tag —
+/// `class Iban(str)` is written `Iban "DE89"` — and treating it as a plain
+/// string here would drop the tag silently. `Symbol` and `Tagged` are final,
+/// so exact is the whole question for them too, and asking it that way costs
+/// a pointer compare where `isinstance` walks the bases of every value that
+/// is not one. `None` is a type the writer does not know, which the SDK's
+/// `convert` hook may spell.
 ///
 /// Only the kind is decided here, so this cannot fail. A value of a known
 /// type that still cannot be spelled — an oversized integer, a non-finite
 /// float, a lone surrogate — is refused by [`Writer::emit`], where the
 /// spelling is: it has been classified, so no conversion is consulted for it.
 ///
-/// `bool` is tested before `int`: in Python `bool` subclasses `int`, so
-/// `isinstance(True, int)` holds and the wrong order would spell `true` as `1`.
+/// Matching exactly is also what makes the order below immaterial. `bool`
+/// subclasses `int` in Python, so an `isinstance` chain would have to test it
+/// first or spell `true` as `1`; two exact types simply never both match.
 fn classify<'py>(value: &Bound<'py, PyAny>) -> Option<Classified<'py>> {
     if value.is_none() {
         return Some(Classified::Null);
@@ -57,10 +61,10 @@ fn classify<'py>(value: &Bound<'py, PyAny>) -> Option<Classified<'py>> {
     if let Ok(b) = value.cast_exact::<PyBool>() {
         return Some(Classified::Bool(b.is_true()));
     }
-    if let Ok(symbol) = value.cast::<Symbol>() {
+    if let Ok(symbol) = value.cast_exact::<Symbol>() {
         return Some(Classified::Symbol(symbol.clone()));
     }
-    if let Ok(tagged) = value.cast::<Tagged>() {
+    if let Ok(tagged) = value.cast_exact::<Tagged>() {
         return Some(Classified::Tagged(tagged.clone()));
     }
     if let Ok(s) = value.cast_exact::<PyString>() {
@@ -81,29 +85,77 @@ fn classify<'py>(value: &Bound<'py, PyAny>) -> Option<Classified<'py>> {
     None
 }
 
-/// Name one step of the place an error happened.
+/// One step of the place a write failed: an array index or an object key.
+enum Segment {
+    Index(usize),
+    Key(String),
+}
+
+/// A write failure.
 ///
-/// The path is assembled on the way out rather than carried on the way in:
-/// each frame the error passes through prepends the step it took, so only a
-/// write that actually fails pays for knowing where. Carrying a path down
-/// the descent instead would charge every value written for the few that
-/// fail -- and it is the cheapest values, the elements of a flat array, that
-/// it would charge the most.
-///
-/// Anything that is not one of the writer's own errors passes through
-/// untouched: a `ValueError` from `Symbol`, a `RecursionError` from the
-/// guard, whatever else the hook raised.
-fn at(py: Python<'_>, err: PyErr, segment: &str) -> PyErr {
-    // Cast rather than `getattr`: `ShapeError` is ours, so the cast that
-    // recognises it also hands over its fields, with no attribute lookup and
-    // no way for the two answers to disagree.
-    let Ok(shape) = err.value(py).cast::<ShapeError>() else {
-        return err;
-    };
-    ser_error(
-        format!("{segment}{}", shape.get().path),
-        shape.as_super().get().message.clone(),
-    )
+/// The writer's own errors stay in Rust until the traversal is over, so a
+/// failure builds one Python exception rather than one per frame it unwinds
+/// through. Anything else -- a `ValueError` from `Symbol`, a `RecursionError`
+/// from the guard, whatever the hook raised -- is carried untouched.
+enum Error {
+    Shape {
+        message: String,
+        /// Innermost step first, read back in reverse: the path is assembled
+        /// on the way out rather than carried on the way in, so only a write
+        /// that actually fails pays for knowing where. Carrying a path down
+        /// the descent instead would charge every value written for the few
+        /// that fail -- and it is the cheapest values, the elements of a flat
+        /// array, that it would charge the most.
+        segments: Vec<Segment>,
+    },
+    Py(PyErr),
+}
+
+impl From<PyErr> for Error {
+    fn from(err: PyErr) -> Self {
+        Error::Py(err)
+    }
+}
+
+impl Error {
+    /// Name one step of the place this happened. A step is pushed, not
+    /// prepended, so a deep failure costs one `Vec` push per frame.
+    fn at(self, segment: impl FnOnce() -> Segment) -> Self {
+        match self {
+            Error::Shape {
+                message,
+                mut segments,
+            } => {
+                segments.push(segment());
+                Error::Shape { message, segments }
+            }
+            other @ Error::Py(_) => other,
+        }
+    }
+
+    /// The Python exception, built once, at the boundary. The root is spelled
+    /// here, so a failure at the top level reads `$` and one below it reads
+    /// `$.orders[2]`.
+    fn into_pyerr(self) -> PyErr {
+        match self {
+            Error::Py(err) => err,
+            Error::Shape { message, segments } => {
+                let mut path = String::from("$");
+                for segment in segments.iter().rev() {
+                    match segment {
+                        Segment::Index(i) => {
+                            let _ = write!(path, "[{i}]");
+                        }
+                        Segment::Key(key) => {
+                            path.push('.');
+                            path.push_str(key);
+                        }
+                    }
+                }
+                ser_error(path, message)
+            }
+        }
+    }
 }
 
 pub(crate) struct Writer<'a, 'py> {
@@ -119,29 +171,34 @@ impl<'a, 'py> Writer<'a, 'py> {
         }
     }
 
-    /// Spell the whole value. The root is the last step named, so a failure
-    /// at the top level reads `$` and one below it reads `$.orders[2]`.
+    /// Spell the whole value, and turn whatever came back into the one
+    /// Python exception the caller sees.
     pub(crate) fn dump(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.emit(value, false, true)
-            .map_err(|err| at(value.py(), err, "$"))
+        self.emit(value, false, true).map_err(Error::into_pyerr)
     }
 
     /// A failure at the value being written now, which names no place yet:
     /// the frames it unwinds through are what know where that is.
-    fn err<T>(&self, message: String) -> PyResult<T> {
-        Err(ser_error(String::new(), message))
+    fn err<T>(&self, message: String) -> Result<T, Error> {
+        Err(Error::Shape {
+            message,
+            segments: Vec::new(),
+        })
     }
 
     /// A hook failure becomes the writer's own, so that it too collects a
     /// path on the way out. `convert` is handed a single object and cannot
     /// know where in the graph it sits.
-    fn locate(&self, py: Python<'_>, err: PyErr) -> PyErr {
-        // `cast_exact`, because the subclasses already name a place: a
-        // `ShapeError` from the hook is not one this traversal located.
-        let Ok(base) = err.value(py).cast_exact::<SopError>() else {
-            return err;
-        };
-        ser_error(String::new(), base.get().message.clone())
+    fn locate(&self, py: Python<'_>, err: PyErr) -> Error {
+        // `cast_exact`, because the subclasses already name a place of their
+        // own: a `ShapeError` from the hook keeps the path it came with.
+        match err.value(py).cast_exact::<SopError>() {
+            Ok(base) => Error::Shape {
+                message: base.get().message.clone(),
+                segments: Vec::new(),
+            },
+            Err(_) => Error::Py(err),
+        }
     }
 
     /// Spell a Python value.
@@ -150,12 +207,12 @@ impl<'a, 'py> Writer<'a, 'py> {
     /// result, so a hook that returns another unknown is an error rather than
     /// a loop. `under_tag` is true for a tag's payload, where a bare symbol
     /// has no legal spelling.
-    pub(crate) fn emit(
+    fn emit(
         &mut self,
         value: &Bound<'_, PyAny>,
         under_tag: bool,
         may_convert: bool,
-    ) -> PyResult<()> {
+    ) -> Result<(), Error> {
         // A Python value can nest arbitrarily, or cyclically, and overflowing
         // the stack here is an abort the caller cannot catch. Borrowing
         // CPython's own recursion guard -- as the stdlib json encoder does --
@@ -235,7 +292,7 @@ impl<'a, 'py> Writer<'a, 'py> {
                         self.out.push(',');
                     }
                     self.emit(&item, false, true)
-                        .map_err(|err| at(py, err, &format!("[{i}]")))?;
+                        .map_err(|err| err.at(|| Segment::Index(i)))?;
                 }
                 self.out.push(']');
             }
@@ -253,7 +310,7 @@ impl<'a, 'py> Writer<'a, 'py> {
                     }
                     self.out.push(':');
                     self.emit(&item, false, true)
-                        .map_err(|err| at(py, err, &format!(".{text}")))?;
+                        .map_err(|err| err.at(|| Segment::Key(text.into_owned())))?;
                 }
                 self.out.push('}');
             }
@@ -261,7 +318,7 @@ impl<'a, 'py> Writer<'a, 'py> {
         Ok(())
     }
 
-    fn refuse_tagged_symbol(&self, under_tag: bool, name: &str) -> PyResult<()> {
+    fn refuse_tagged_symbol(&self, under_tag: bool, name: &str) -> Result<(), Error> {
         if under_tag {
             return self.err(format!(
                 "a tag cannot be applied to a bare symbol (`{name}`)"
@@ -274,7 +331,7 @@ impl<'a, 'py> Writer<'a, 'py> {
     /// the path with. Exact `str` only: under the protocol a str subclass
     /// carries a tag, and a key has nowhere to put one, so accepting it here
     /// would drop the tag silently.
-    fn key_text<'k>(&self, key: &'k Bound<'_, PyAny>) -> PyResult<Cow<'k, str>> {
+    fn key_text<'k>(&self, key: &'k Bound<'_, PyAny>) -> Result<Cow<'k, str>, Error> {
         match key.cast_exact::<PyString>() {
             Ok(key) => match key.to_cow() {
                 Ok(text) => Ok(text),

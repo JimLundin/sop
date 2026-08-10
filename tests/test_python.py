@@ -6,10 +6,15 @@ the format's values become Python ones, what the native types refuse, and
 where Python's own semantics need guarding against.
 """
 
+import copy
 import enum
+import gc
 import math
 import pickle
 import re
+import sys
+import types
+import weakref
 from dataclasses import dataclass
 from typing import Any
 
@@ -160,6 +165,62 @@ def test_tagged_hashes_like_a_frozen_dataclass():
         hash(sop.Tagged("a", [1]))
 
 
+def test_every_value_survives_copying_and_pickling():
+    # A value handed to a worker process is pickled there and back, so one
+    # that cannot be rebuilt is one the caller never gets to read.  Every
+    # other member of `Value` already round-trips; `Symbol` and `Tagged` are
+    # the two that had to say how.
+    parsed = sop.loads[sop.Value]("{a: Sym, b: T [1,2], c: {d: null}, e: 1.5}")
+    for value in (
+        None,
+        True,
+        1,
+        1.5,
+        "s",
+        (1, 2),
+        sop.Symbol("s"),
+        sop.Tagged("T", 1),
+        parsed,
+    ):
+        assert pickle.loads(pickle.dumps(value)) == value
+        assert copy.copy(value) == value
+        assert copy.deepcopy(value) == value
+    # And a whole document still spells the same after the round trip.
+    assert sop.dumps(pickle.loads(pickle.dumps(parsed))) == sop.dumps(parsed)
+
+
+def test_a_deep_copy_copies_the_payload_and_a_shallow_one_does_not():
+    # The payload is one of the arguments the value is rebuilt from, so the
+    # two kinds of copy differ in the way they do everywhere else.
+    payload = [1, 2]
+    tagged = sop.Tagged("T", payload)
+    assert copy.copy(tagged).value is payload
+    assert copy.deepcopy(tagged).value == payload
+    assert copy.deepcopy(tagged).value is not payload
+
+
+def test_a_value_is_rebuilt_by_calling_its_class():
+    # Rebuilding goes back through the constructor rather than restoring the
+    # fields behind its back...
+    assert sop.Symbol("s").__reduce__() == (sop.Symbol, ("s",))
+    assert sop.Tagged("T", 1).__reduce__() == (sop.Tagged, ("T", 1))
+
+    # ...which is what makes this hold: a pickle from anywhere else cannot
+    # mint a value the constructor would have refused.
+    for arguments, refused in (
+        ((sop.Symbol, ("null",)), "spelled with the Python value"),
+        ((sop.Tagged, ("not an identifier", 1)), "is not an identifier"),
+        ((sop.Tagged, ("T", None)), "bare symbol"),
+    ):
+
+        class Forged:
+            def __reduce__(self, arguments=arguments):
+                return arguments
+
+        with pytest.raises(ValueError, match=refused):
+            pickle.loads(pickle.dumps(Forged()))
+
+
 def test_native_values_are_immutable():
     with pytest.raises(AttributeError):
         sop.Symbol("x").name = "y"  # type: ignore[misc]
@@ -221,6 +282,43 @@ def test_every_error_survives_a_round_trip():
         assert type(copy) is type(error)
         assert str(copy) == str(error)
         assert copy.message == error.message
+
+
+def test_the_error_subclasses_are_final():
+    # `SopError` is the one open class, so a caller can extend the `except`
+    # that already catches everything; the two below it each carry the one
+    # location they have and are closed.  The stubs say `@final` of exactly
+    # these two, and a stub that claims less than the runtime enforces is a
+    # check that passes on code which crashes.
+    class Extended(sop.SopError): ...
+
+    assert issubclass(Extended, sop.SopError)
+    for closed in (sop.ParseError, sop.ShapeError):
+        with pytest.raises(TypeError, match="not an acceptable base type"):
+            type("Nope", (closed,), {})
+
+
+def test_an_error_is_built_location_first_and_cannot_be_edited_after():
+    # Both subclasses are the base plus a location, so both take the location
+    # first, in the order `__str__` renders it.  And the native types are
+    # frozen, errors included: what an error says about where it happened is
+    # fixed when it is raised.
+    parsed = sop.ParseError(3, 7, "boom")
+    shaped = sop.ShapeError("$.a", "boom")
+    assert str(parsed) == "3:7: boom"
+    assert str(shaped) == "$.a: boom"
+    assert (parsed.line, parsed.column, parsed.message) == (3, 7, "boom")
+    assert (shaped.path, shaped.message) == ("$.a", "boom")
+
+    for error, attribute in (
+        (parsed, "line"),
+        (parsed, "column"),
+        (parsed, "message"),
+        (shaped, "path"),
+        (shaped, "message"),
+    ):
+        with pytest.raises(AttributeError, match="not writable"):
+            setattr(error, attribute, "edited")
 
 
 def test_a_write_error_names_where_in_the_value_it_failed():
@@ -518,3 +616,57 @@ def test_a_class_that_opts_out_of_a_tag_is_not_a_scalar():
 
     with pytest.raises(sop.ShapeError, match="unsupported shape"):
         sop.loads[Opaque]('"x"')
+
+
+# ---------------------------------------------------------------------------
+# What the SDK works out about a class
+# ---------------------------------------------------------------------------
+
+
+def test_a_subclass_does_not_inherit_what_was_worked_out_for_its_base():
+    # A class's fields and annotations are resolved once and kept on the class
+    # itself, so they are read off that class and never off a base.  The base
+    # is written first on purpose: that is what fills its own answers in, and
+    # an inherited lookup would then hand them to the subclass.
+    @dataclass
+    class Base:
+        a: int
+
+    @dataclass
+    class Sub(Base):
+        b: str = "x"
+
+    assert sop.dumps(Base(1)) == "Base {a:1}"
+    assert sop.dumps(Sub(1, "y")) == 'Sub {a:1,b:"y"}'
+    assert sop.loads[Sub]('Sub {a:1,b:"y"}') == Sub(1, "y")
+
+
+def test_what_is_worked_out_about_a_class_dies_with_the_class():
+    # Those answers are kept on the class rather than in a table here, so a
+    # class built at run time is collectable once nothing else refers to it.
+    # `Node` is self-referential on purpose: its own annotation names it, so
+    # a table here would hold it up through the *value* it stored, which is
+    # something weak keys cannot prevent.
+    module = types.ModuleType("sop_throwaway")
+    sys.modules[module.__name__] = module
+    exec(
+        "from dataclasses import dataclass\n"
+        "@dataclass\n"
+        "class Node:\n"
+        "    name: str\n"
+        '    next: "Node | None" = None\n',
+        module.__dict__,
+    )
+    node = module.Node
+
+    assert (
+        sop.dumps(node("a", node("b")))
+        == 'Node {name:"a",next:Node {name:"b",next:null}}'
+    )
+    assert sop.loads[node]('Node {name:"a"}') == node("a")
+
+    seen = weakref.ref(node)
+    del node, module
+    del sys.modules["sop_throwaway"]
+    gc.collect()
+    assert seen() is None
