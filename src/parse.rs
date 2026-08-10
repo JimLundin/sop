@@ -115,11 +115,11 @@ impl<'a, 'py> Parser<'a, 'py> {
     }
 
     fn err<T>(&self, message: impl Into<String>) -> PyResult<T> {
-        self.err_at(message, self.line, self.col)
+        self.err_at(self.line, self.col, message)
     }
 
-    fn err_at<T>(&self, message: impl Into<String>, line: usize, column: usize) -> PyResult<T> {
-        Err(sop_error(message.into(), line, column))
+    fn err_at<T>(&self, line: usize, column: usize, message: impl Into<String>) -> PyResult<T> {
+        Err(sop_error(line, column, message.into()))
     }
 
     // -- whitespace and comments --------------------------------------------
@@ -144,7 +144,7 @@ impl<'a, 'py> Parser<'a, 'py> {
                 self.bump();
                 loop {
                     if self.eof() {
-                        return self.err_at("unterminated block comment", line, column);
+                        return self.err_at(line, column, "unterminated block comment");
                     }
                     if self.byte(0) == Some(b'*') && self.byte(1) == Some(b'/') {
                         self.bump();
@@ -223,7 +223,7 @@ impl<'a, 'py> Parser<'a, 'py> {
                 // a missing comma between two identifiers would silently
                 // denote one tagged value instead of being an error.
                 if under_tag {
-                    return self.err_at("a tag cannot be applied to a bare symbol", line, column);
+                    return self.err_at(line, column, "a tag cannot be applied to a bare symbol");
                 }
                 // On the wire `true`, `false` and `null` are ordinary
                 // symbols. Choosing host types for them is the SDK's call,
@@ -254,7 +254,7 @@ impl<'a, 'py> Parser<'a, 'py> {
             // trailing comma are the same case, as in `parse_object`.
             self.skip_ws()?;
             match self.byte(0) {
-                None => return self.err_at("unterminated array", line, column),
+                None => return self.err_at(line, column, "unterminated array"),
                 Some(b']') => {
                     self.bump();
                     break;
@@ -269,7 +269,7 @@ impl<'a, 'py> Parser<'a, 'py> {
                     self.bump();
                     break;
                 }
-                None => return self.err_at("unterminated array", line, column),
+                None => return self.err_at(line, column, "unterminated array"),
                 Some(_) => {
                     return self
                         .err("expected ',' or ']': only an identifier may be followed by a value");
@@ -289,7 +289,7 @@ impl<'a, 'py> Parser<'a, 'py> {
         loop {
             self.skip_ws()?;
             if self.eof() {
-                return self.err_at("unterminated object", line, column);
+                return self.err_at(line, column, "unterminated object");
             }
             if self.byte(0) == Some(b'}') {
                 self.bump();
@@ -317,7 +317,7 @@ impl<'a, 'py> Parser<'a, 'py> {
                     self.bump();
                     break;
                 }
-                None => return self.err_at("unterminated object", line, column),
+                None => return self.err_at(line, column, "unterminated object"),
                 Some(_) => {
                     return self
                         .err("expected ',' or '}': only an identifier may be followed by a value");
@@ -393,7 +393,7 @@ impl<'a, 'py> Parser<'a, 'py> {
             }
 
             let Some(b) = self.byte(0) else {
-                return self.err_at("unterminated string", line, column);
+                return self.err_at(line, column, "unterminated string");
             };
             match b {
                 b'"' => {

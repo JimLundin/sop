@@ -121,7 +121,40 @@ def _is_unordered(obj: object) -> TypeIs[Set[object]]:
     return isinstance(obj, (set, frozenset))
 
 
-@functools.cache
+def _per_class[V](compute: Callable[[type], V]) -> Callable[[type], V]:
+    """`functools.cache` for a question asked of a class, with the answer kept
+    on the class rather than here.
+
+    Here would be a GC root, and these answers name the class they are about:
+    `_hints` of a self-referential dataclass holds that dataclass inside its
+    own annotation.  A cache in this module would pin such a class for the
+    life of the process -- weak keys do not help, because it is the *value*
+    that refers back.  On the class the same reference is an ordinary cycle,
+    which the collector takes apart once nothing else refers to the class.
+
+    The slot is named after the function, so two of these cannot collide.
+    Read out of `cls.__dict__` and not with `getattr`: an inherited answer
+    would be the base's, and a subclass declares its own fields.  A static
+    type -- `int`, `str`, `NoneType` -- refuses the attribute; those are
+    answered uncached, being a fixed few that never go away."""
+    slot = f"__sop{compute.__name__}_cache__"
+
+    @functools.wraps(compute)
+    def cached(cls: type) -> V:
+        try:
+            answer: V = cls.__dict__[slot]
+        except KeyError:
+            answer = compute(cls)
+            try:
+                setattr(cls, slot, answer)
+            except TypeError:
+                pass
+        return answer
+
+    return cached
+
+
+@_per_class
 def _tag_of(cls: type[object]) -> str | None:
     """A class's wire tag: `__sop_tag__` if set, otherwise its own name.
     Setting it to `None` is how a class asks to be carried as a bare object.
@@ -132,8 +165,8 @@ def _tag_of(cls: type[object]) -> str | None:
     user classes waiting for a tag; enums, which are carried as symbols; and
     `Symbol`, `Tagged` and `Any`, which match on kind rather than on a tag.
 
-    A class, not a shape: only a class can name a tag, and only a class is
-    the hashable key this is cached on."""
+    A class, not a shape: only a class can name a tag, and only a class can
+    carry the answer."""
     if cls.__module__ in ("builtins", "typing"):
         return None
     if issubclass(cls, (enum.Enum, Symbol, Tagged)):
@@ -167,7 +200,7 @@ def _scalar_tag(cls: type) -> str | None:
     return tag if isinstance(tag, str) else None
 
 
-@functools.cache
+@_per_class
 def _hints(cls: type) -> dict[str, TypeForm[Any]]:
     """Each field's declared type -- which is to say its shape -- with PEP 649
     annotations evaluated.  Cached: resolution walks the MRO, and decoding
@@ -176,7 +209,7 @@ def _hints(cls: type) -> dict[str, TypeForm[Any]]:
     return hints
 
 
-@functools.cache
+@_per_class
 def _fields(shape: type) -> tuple[tuple[dataclasses.Field[object], str], ...]:
     """Each field with its sop key, resolved once per class.  The key is what
     `metadata={"sop": "from"}` names, or the field's own name verbatim."""
@@ -452,11 +485,7 @@ def _decode_enum[E: enum.Enum](value: Value, shape: type[E], path: str) -> E:
 
 
 def _decode_dataclass[T](value: Value, shape: type[T], path: str) -> T:
-    # The lookups below are cached on the class itself, and a cache key is
-    # asked to be hashable -- which a bare `type` is known to be and a
-    # `type[T]` is not, T being free.
-    cls: type = shape
-    if tag := _tag_of(cls):
+    if tag := _tag_of(shape):
         if not isinstance(value, Tagged):
             raise ShapeError(
                 path, f"expected a value tagged `{tag}`, found {_describe(value)}"
@@ -468,9 +497,9 @@ def _decode_dataclass[T](value: Value, shape: type[T], path: str) -> T:
     if not isinstance(value, frozendict):
         raise ShapeError(path, f"expected an object, found {_describe(value)}")
 
-    hints = _hints(cls)
+    hints = _hints(shape)
     kwargs: dict[str, Any] = {}
-    for field, key in _fields(cls):
+    for field, key in _fields(shape):
         if not field.init:
             continue
         if key in value:

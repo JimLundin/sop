@@ -94,17 +94,16 @@ fn classify<'py>(value: &Bound<'py, PyAny>) -> Option<Classified<'py>> {
 /// untouched: a `ValueError` from `Symbol`, a `RecursionError` from the
 /// guard, whatever else the hook raised.
 fn at(py: Python<'_>, err: PyErr, segment: &str) -> PyErr {
-    if !err.is_instance_of::<ShapeError>(py) {
+    // Cast rather than `getattr`: `ShapeError` is ours, so the cast that
+    // recognises it also hands over its fields, with no attribute lookup and
+    // no way for the two answers to disagree.
+    let Ok(shape) = err.value(py).cast::<ShapeError>() else {
         return err;
-    }
-    let value = err.value(py);
-    match (
-        value.getattr("path").and_then(|p| p.extract::<String>()),
-        value.getattr("message").and_then(|m| m.extract::<String>()),
-    ) {
-        (Ok(path), Ok(message)) => ser_error(format!("{segment}{path}"), message),
-        _ => err,
-    }
+    };
+    ser_error(
+        format!("{segment}{}", shape.get().path),
+        shape.as_super().get().message.clone(),
+    )
 }
 
 pub(crate) struct Writer<'a, 'py> {
@@ -137,13 +136,12 @@ impl<'a, 'py> Writer<'a, 'py> {
     /// path on the way out. `convert` is handed a single object and cannot
     /// know where in the graph it sits.
     fn locate(&self, py: Python<'_>, err: PyErr) -> PyErr {
-        if !err.get_type(py).is(py.get_type::<SopError>()) {
+        // `cast_exact`, because the subclasses already name a place: a
+        // `ShapeError` from the hook is not one this traversal located.
+        let Ok(base) = err.value(py).cast_exact::<SopError>() else {
             return err;
-        }
-        match err.value(py).getattr("message").and_then(|m| m.extract()) {
-            Ok(message) => ser_error(String::new(), message),
-            Err(_) => err,
-        }
+        };
+        ser_error(String::new(), base.get().message.clone())
     }
 
     /// Spell a Python value.
