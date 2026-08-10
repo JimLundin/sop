@@ -6,7 +6,7 @@ reads and writes, and a Python shape layer on top.
 There is no separate specification. **The format is what this implementation
 accepts**, and the tests are where that is written down:
 
-- `tests/test_corpus.py` — 85 conformance cases, each an input and either its
+- `tests/test_corpus.py` — 91 conformance cases, each an input and either its
   exact serialised output or the fact that it is rejected. The expected
   outputs are written by hand; the implementation is never used to produce
   them.
@@ -166,7 +166,12 @@ the wire. That is a schema decision and it belongs to the schema.
 
 Number kind is spelling-determined — digits alone denote an integer, a point
 or an exponent a float — and writing preserves it, the sign of `-0.0`
-included.
+included. A float is written plainly while its decimal exponent is in
+`(-6, 21]` and with an exponent outside that, so `1e300` is three characters
+of mantissa rather than three hundred of padding. Those are ECMAScript's
+bounds, which RFC 8785 adopts as the canonical spelling of a number in a JSON
+document; only the bounds are borrowed, and a positive exponent is written
+without its `+`.
 
 Errors name the path:
 
@@ -228,7 +233,7 @@ python/sop/_shape.py  how Python types map onto sop values
 python/sop/_core.pyi  type stubs for the extension, kept by hand
 python/sop/py.typed   PEP 561 marker, so checkers read the stubs
 
-tests/test_corpus.py      the 85 conformance cases
+tests/test_corpus.py      the 91 conformance cases
 tests/test_shapes.py      the shape language, both directions, and its errors
 tests/test_python.py      Python semantics: host types, native types, equality,
                           numeric limits, the single-traversal write path

@@ -498,6 +498,10 @@ def test_a_float_keeps_its_kind():
     assert isinstance(sop.loads[Any]("2.0"), float)
     assert sop.dumps(1e16) == "10000000000000000.0"
     assert isinstance(sop.loads[Any](sop.dumps(1e16)), float)
+    # Outside the plain band it is the exponent that keeps the kind, so the
+    # rule holds there too and no `.0` is needed.
+    assert sop.dumps(1e300) == "1e300"
+    assert isinstance(sop.loads[Any](sop.dumps(1e300)), float)
     assert sop.loads[float]("2") == 2.0  # an integer literal is still a number
 
 

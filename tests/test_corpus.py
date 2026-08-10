@@ -99,16 +99,23 @@ VALID = [
     ("fraction", "[0.5,1.25]", "[0.5,1.25]"),
     ("tenth", "[0.1]", "[0.1]"),
     ("beyond_double_precision", "[9007199254740993]", "[9007199254740993]"),
-    (
-        "big_integer",
-        "123456789012345678901234567890",
-        "123456789012345680000000000000.0",
-    ),
+    ("big_integer", "123456789012345678901234567890", "1.2345678901234568e29"),
     ("beyond_i64", "9223372036854775808", "9223372036854776000.0"),
-    ("large_float", "[1e30]", "[1000000000000000000000000000000.0]"),
     ("small_float", "[1.5e-5]", "[0.000015]"),
     ("float_repr", "[1e16]", "[10000000000000000.0]"),
     ("float_underflow", "[1e-400]", "[0.0]"),
+    # A float is written plainly while its decimal exponent is in (-6, 21],
+    # and with an exponent outside that -- ECMAScript's bounds, which RFC 8785
+    # adopts for the canonical spelling of a number.  The four cases below sit
+    # either side of each bound.
+    ("plain_upper_bound", "[1e20]", "[100000000000000000000.0]"),
+    ("exponent_upper_bound", "[1e21]", "[1e21]"),
+    ("plain_lower_bound", "[1e-6]", "[0.000001]"),
+    ("exponent_lower_bound", "[1e-7]", "[1e-7]"),
+    # Without an exponent these would be spelled as 301 and 300 digits.
+    ("large_float", "[1e30]", "[1e30]"),
+    ("huge_float", "[1e300]", "[1e300]"),
+    ("tiny_float", "[1e-300]", "[1e-300]"),
     ("duplicate_keys", "{a:1,a:2}", "{a:2}"),
     ("bom", "\ufeff{}", "{}"),
     ("unicode_whitespace_2028", "[\u20281\u2028]", "[1]"),

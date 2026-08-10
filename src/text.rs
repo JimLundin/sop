@@ -64,6 +64,23 @@ pub(crate) fn escape_string(s: &str, out: &mut String) {
 /// non-finite value, which has no spelling.
 pub(crate) fn write_f64(f: f64, out: &mut String) {
     debug_assert!(f.is_finite(), "a non-finite float has no sop spelling");
+    // Rust's `Display` never uses an exponent, so 1e300 would be spelled as
+    // 301 digits, 300 of which say nothing. Outside these bounds the exponent
+    // is both shorter and more legible, and it already does the point's work:
+    // the `e` is what keeps the number reading back as a float.
+    //
+    // The bounds are ECMAScript's `Number::toString` (ECMA-262 6.1.6.1.20) --
+    // plain notation for a decimal exponent in (-6, 21], which is `1e-6`
+    // inclusive to `1e21` exclusive. They are borrowed rather than invented
+    // because RFC 8785 settles the same question, for the canonical spelling
+    // of a number in a JSON document, by pointing at that algorithm. Only the
+    // bounds are taken: a positive exponent is written without its `+`, which
+    // sop's grammar makes optional and which says nothing.
+    let magnitude = f.abs();
+    if magnitude != 0.0 && !(1e-6..1e21).contains(&magnitude) {
+        let _ = write!(out, "{f:e}");
+        return;
+    }
     let start = out.len();
     let _ = write!(out, "{f}");
     if !out[start..].contains(['.', 'e', 'E']) {
