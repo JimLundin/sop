@@ -77,9 +77,12 @@ them identically; the core knows only the immutable set, so those are frozen
 by the shape layer on the way out, and a value that came from `loads` is
 written without touching Python at all.
 
-The whole public API is seven names: `loads`, `dumps`, `Value`, `Symbol`,
-`Tagged`, `SopError`, and `ShapeError` (a subclass of `SopError`, so one
-`except` covers both).
+The whole public API is eight names: `loads`, `dumps`, `Value`, `Symbol`,
+`Tagged`, and three errors. `SopError` is the base and catches everything;
+it is raised on its own only when writing, where a failure has no location.
+Reading has two, and each carries the one location it actually has:
+`ParseError` a `line` and `column` in the text, `ShapeError` a `path` into
+the value. Neither invents the other's.
 
 The subscript is annotated `TypeForm[T]` (PEP 747), so shapes that are not
 classes work too — `sop.loads[Order | None](text)` reveals as `Order | None`,
@@ -212,7 +215,7 @@ Cargo.toml           one crate, whose cdylib is the extension module
 pyproject.toml       the Python package, built by maturin
 .cargo/config.toml   defaults PYO3_PYTHON to python3.15
 
-src/lib.rs           the module: Symbol, Tagged, SopError, loads, dumps
+src/lib.rs           the module: Symbol, Tagged, the errors, loads, dumps
 src/parse.rs         reading text into Python objects, one pass
 src/write.rs         writing Python objects out as text, one traversal
 src/text.rs          shared lexical facts: identifiers, escapes, number spelling

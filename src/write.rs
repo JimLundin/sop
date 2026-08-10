@@ -17,14 +17,20 @@ use pyo3::types::{PyBool, PyFloat, PyFrozenDict, PyFrozenDictMethods, PyInt, PyS
 use crate::text::{escape_string, is_identifier, write_f64};
 use crate::{Recursion, Symbol, Tagged, ser_error};
 
+/// What kind of sop value an object is, and the object itself.
+///
+/// Each variant carries the value rather than a reading of it: cloning a
+/// `Bound` is a reference count, where pulling out the `str`, the symbol's
+/// name or the tag would copy a string on every value written. `bool` and
+/// `f64` are the exceptions, being copies already.
 enum Classified<'py> {
     Null,
     Bool(bool),
     Int(Bound<'py, PyInt>),
     Float(f64),
-    Str(String),
-    Symbol(String),
-    Tagged(String, Bound<'py, PyAny>),
+    Str(Bound<'py, PyString>),
+    Symbol(Bound<'py, Symbol>),
+    Tagged(Bound<'py, Tagged>),
     Array(Bound<'py, PyTuple>),
     Object(Bound<'py, PyFrozenDict>),
 }
@@ -33,52 +39,45 @@ enum Classified<'py> {
 ///
 /// The builtin cases are matched on the *exact* type. A subclass may carry a
 /// tag — `class Iban(str)` is written `iban "DE89"` — and treating it as a
-/// plain string here would drop the tag silently. `Ok(None)` is a type the
-/// writer does not know, which the SDK's `convert` hook may spell; `Err` is
-/// a value of a known type that cannot be spelled at all, which no
-/// conversion can fix.
+/// plain string here would drop the tag silently. `None` is a type the writer
+/// does not know, which the SDK's `convert` hook may spell.
+///
+/// Only the kind is decided here, so this cannot fail. A value of a known
+/// type that still cannot be spelled — an oversized integer, a non-finite
+/// float, a lone surrogate — is refused by [`Writer::emit`], where the
+/// spelling is: it has been classified, so no conversion is consulted for it.
 ///
 /// `bool` is tested before `int`: in Python `bool` subclasses `int`, so
 /// `isinstance(True, int)` holds and the wrong order would spell `true` as `1`.
-fn classify<'py>(value: &Bound<'py, PyAny>) -> PyResult<Option<Classified<'py>>> {
+fn classify<'py>(value: &Bound<'py, PyAny>) -> Option<Classified<'py>> {
     if value.is_none() {
-        return Ok(Some(Classified::Null));
+        return Some(Classified::Null);
     }
     if let Ok(b) = value.cast_exact::<PyBool>() {
-        return Ok(Some(Classified::Bool(b.is_true())));
+        return Some(Classified::Bool(b.is_true()));
     }
     if let Ok(symbol) = value.cast::<Symbol>() {
-        return Ok(Some(Classified::Symbol(symbol.get().name.clone())));
+        return Some(Classified::Symbol(symbol.clone()));
     }
     if let Ok(tagged) = value.cast::<Tagged>() {
-        let tagged = tagged.get();
-        return Ok(Some(Classified::Tagged(
-            tagged.tag.clone(),
-            tagged.value.bind(value.py()).clone(),
-        )));
+        return Some(Classified::Tagged(tagged.clone()));
     }
     if let Ok(s) = value.cast_exact::<PyString>() {
-        // A Python `str` may hold a lone surrogate; sop text cannot, and the
-        // parser rejects the escape for the same reason. Refuse it as a
-        // SopError rather than leaking the codec's UnicodeEncodeError.
-        let text = s.to_cow().map_err(|_| {
-            ser_error("string contains a lone surrogate, which sop text cannot hold".into())
-        })?;
-        return Ok(Some(Classified::Str(text.into_owned())));
+        return Some(Classified::Str(s.clone()));
     }
     if let Ok(i) = value.cast_exact::<PyInt>() {
-        return Ok(Some(Classified::Int(i.clone())));
+        return Some(Classified::Int(i.clone()));
     }
     if let Ok(f) = value.cast_exact::<PyFloat>() {
-        return Ok(Some(Classified::Float(f.value())));
+        return Some(Classified::Float(f.value()));
     }
     if let Ok(items) = value.cast_exact::<PyTuple>() {
-        return Ok(Some(Classified::Array(items.clone())));
+        return Some(Classified::Array(items.clone()));
     }
     if let Ok(map) = value.cast_exact::<PyFrozenDict>() {
-        return Ok(Some(Classified::Object(map.clone())));
+        return Some(Classified::Object(map.clone()));
     }
-    Ok(None)
+    None
 }
 
 pub(crate) struct Writer<'a, 'py> {
@@ -111,8 +110,9 @@ impl<'a, 'py> Writer<'a, 'py> {
         // CPython's own recursion guard -- as the stdlib json encoder does --
         // turns that into a RecursionError at the interpreter's limit, with no
         // limit of our own.
-        let _guard = Recursion::enter(value.py(), c" while writing sop")?;
-        let Some(kind) = classify(value)? else {
+        let py = value.py();
+        let _guard = Recursion::enter(py, c" while writing sop")?;
+        let Some(kind) = classify(value) else {
             if !may_convert {
                 return Err(ser_error(format!("not a sop value: {}", value.repr()?)));
             }
@@ -131,11 +131,21 @@ impl<'a, 'py> Writer<'a, 'py> {
             }
             // Symbol and Tagged validate their names on construction, so the
             // writer cannot be handed one that does not round-trip.
-            Classified::Symbol(name) => {
-                self.refuse_tagged_symbol(under_tag, &name)?;
-                self.out.push_str(&name);
+            Classified::Symbol(symbol) => {
+                let name = &symbol.get().name;
+                self.refuse_tagged_symbol(under_tag, name)?;
+                self.out.push_str(name);
             }
-            Classified::Str(s) => escape_string(&s, &mut self.out),
+            Classified::Str(s) => {
+                // A Python `str` may hold a lone surrogate; sop text cannot,
+                // and the parser rejects the escape for the same reason.
+                // Refuse it as a SopError rather than leaking the codec's
+                // UnicodeEncodeError.
+                let text = s.to_cow().map_err(|_| {
+                    ser_error("string contains a lone surrogate, which sop text cannot hold".into())
+                })?;
+                escape_string(&text, &mut self.out);
+            }
             // Python integers are unbounded; the format's numeric domain is
             // i64 or f64. A larger one would not read back to an equal value,
             // so it is refused for the same reason the parser refuses a
@@ -156,10 +166,11 @@ impl<'a, 'py> Writer<'a, 'py> {
             Classified::Float(f) => {
                 return Err(ser_error(format!("{f} has no sop representation")));
             }
-            Classified::Tagged(tag, payload) => {
-                self.out.push_str(&tag);
+            Classified::Tagged(tagged) => {
+                let tagged = tagged.get();
+                self.out.push_str(&tagged.tag);
                 self.out.push(' ');
-                self.emit(&payload, true, true)?;
+                self.emit(tagged.value.bind(py), true, true)?;
             }
             Classified::Array(items) => {
                 self.out.push('[');

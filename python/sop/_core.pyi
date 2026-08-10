@@ -1,28 +1,40 @@
-"""Type stubs for the Rust core extension module, kept by hand: the recursive
-`Value` alias and `Tagged`'s parameter are beyond what stub generation could
-emit."""
+"""Type stubs for the Rust core extension module, kept by hand: `Tagged`'s
+parameter and its default are beyond what stub generation could emit."""
 
 from collections.abc import Callable
 from typing import final
 
-# The closed set the core can decode.  Kept in step with `sop.Value`, which
-# cannot be imported here without a cycle through the package.
-type Value = (
-    None
-    | bool
-    | int
-    | float
-    | str
-    | Symbol
-    | Tagged
-    | tuple[Value, ...]
-    | frozendict[str, Value]
-)
+# The value domain the core produces.  It is spelled where it can also exist
+# at run time -- see `_shape.Value` -- and re-exported here under its own name,
+# so the signatures below mean by `Value` exactly what `sop.Value` is.  The
+# cycle this makes is a checker's to resolve; a stub never runs.
+from ._shape import Value as Value
 
 class SopError(ValueError):
-    message: str
-    line: int
-    column: int
+    """A value has no sop spelling.  Raised on its own while writing, where
+    there is no position and no path; the two subclasses below add the one
+    each reading direction has."""
+
+    @property
+    def message(self) -> str: ...
+    def __init__(self, message: str) -> None: ...
+
+class ParseError(SopError):
+    """The text is not sop, at a position in it."""
+
+    @property
+    def line(self) -> int: ...
+    @property
+    def column(self) -> int: ...
+    def __init__(self, message: str, line: int, column: int) -> None: ...
+
+class ShapeError(SopError):
+    """The document parsed, but does not have the requested shape, at a path
+    in it."""
+
+    @property
+    def path(self) -> str: ...
+    def __init__(self, path: str, message: str) -> None: ...
 
 @final
 class Symbol:

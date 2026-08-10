@@ -466,7 +466,7 @@ def test_a_class_without_a_declared_tag_is_not_a_scalar():
     class Anon:
         pass
 
-    with pytest.raises(sop.ShapeError, match="cannot encode Anon"):
+    with pytest.raises(sop.SopError, match="cannot encode Anon"):
         sop.dumps(Anon())
     with pytest.raises(sop.ShapeError, match="unsupported shape"):
         sop.loads[Anon]('"x"')

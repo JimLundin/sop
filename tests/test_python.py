@@ -8,6 +8,7 @@ where Python's own semantics need guarding against.
 
 import enum
 import math
+import pickle
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -189,9 +190,47 @@ def test_shape_errors_carry_a_path():
     with pytest.raises(sop.ShapeError) as caught:
         sop.loads[dict[str, int]]("{a: Active}")
     assert str(caught.value).startswith("$.a: ")
-    # No position -- the document parsed -- but the attributes every SopError
-    # promises are present.
-    assert (caught.value.line, caught.value.column) == (0, 0)
+    # The path is where it failed, and it is the whole location: a document
+    # that parsed has no position left to report.
+    assert caught.value.path == "$.a"
+    assert not hasattr(caught.value, "line")
+
+
+def test_every_error_survives_a_round_trip():
+    # An exception raised in a worker process is pickled back to its parent,
+    # so an error that cannot be rebuilt from its own `args` is one the
+    # caller never gets to read. Each class is reconstructed by calling it
+    # with the arguments it was raised with, which is what makes this hold.
+    raised: list[sop.SopError] = []
+    for act in (
+        lambda: sop.loads[Any]("[1 2]"),
+        lambda: sop.loads[dict[str, int]]("{a: Active}"),
+        lambda: sop.dumps(object()),
+    ):
+        with pytest.raises(sop.SopError) as caught:
+            act()
+        raised.append(caught.value)
+
+    assert [type(e) for e in raised] == [sop.ParseError, sop.ShapeError, sop.SopError]
+    for error in raised:
+        copy = pickle.loads(pickle.dumps(error))
+        assert type(copy) is type(error)
+        assert str(copy) == str(error)
+        assert copy.message == error.message
+
+
+def test_each_error_carries_only_the_location_it_has():
+    # Reading text has a position, reading a value has a path, and writing
+    # has neither; none of the three invents one of the others.
+    with pytest.raises(sop.ParseError) as parsed:
+        sop.loads[Any]("[1 2]")
+    assert (parsed.value.line, parsed.value.column) == (1, 4)
+    assert not hasattr(parsed.value, "path")
+
+    with pytest.raises(sop.ShapeError) as shaped:
+        sop.loads[int]('"x"')
+    assert shaped.value.path == "$"
+    assert not hasattr(shaped.value, "line")
 
 
 def test_loads_needs_a_shape():
@@ -221,9 +260,10 @@ def test_a_type_alias_is_its_right_hand_side():
 
 
 def test_unencodable_object():
-    # The core rejects it first, then the shape layer does, and the shape
-    # layer's message is the one that reaches the caller because it has a path.
-    with pytest.raises(sop.ShapeError, match="cannot encode object"):
+    # The core rejects it first and asks the shape layer, which rejects it
+    # too; writing has neither a position nor a path, so it is a plain
+    # SopError -- and `except SopError` is what catches every failure anyway.
+    with pytest.raises(sop.SopError, match="cannot encode object"):
         sop.dumps(object())
 
 
@@ -423,7 +463,7 @@ def test_an_object_of_the_wrong_shape_reports_the_missing_key():
 
 
 def test_an_unknown_python_object_is_described_by_its_type():
-    with pytest.raises(sop.ShapeError, match="cannot encode complex"):
+    with pytest.raises(sop.SopError, match="cannot encode complex"):
         sop.dumps(1 + 2j)
 
 

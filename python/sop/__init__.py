@@ -39,12 +39,21 @@ pure-Python parser and no fallback.
 from typing import TypeForm
 
 from . import _shape
-from ._core import SopError, Symbol, Tagged
+from ._core import ParseError, ShapeError, SopError, Symbol, Tagged
 from ._core import dumps as _dumps
 from ._core import loads as _loads
-from ._shape import ShapeError, Value
+from ._shape import Value
 
-__all__ = ["ShapeError", "SopError", "Symbol", "Tagged", "Value", "dumps", "loads"]
+__all__ = [
+    "ParseError",
+    "ShapeError",
+    "SopError",
+    "Symbol",
+    "Tagged",
+    "Value",
+    "dumps",
+    "loads",
+]
 
 
 class _TypedLoads[T]:

@@ -43,7 +43,7 @@ import typing
 from collections.abc import Callable, Iterable, Set
 from typing import Any, TypeForm, TypeIs, get_args, get_origin
 
-from ._core import SopError, Symbol, Tagged
+from ._core import ShapeError, SopError, Symbol, Tagged
 
 type Value = (
     None
@@ -52,31 +52,22 @@ type Value = (
     | float
     | str
     | Symbol
-    | Tagged
+    | Tagged[Value]
     | tuple[Value, ...]
     | frozendict[str, Value]
 )
-"""The value domain, which belongs to the core -- `_core.pyi` declares it, and
-`loads` is what produces it.
+"""The value domain, which belongs to the core -- `loads` is what produces it.
 
-It is written out a second time here, which is a wart.  A stub does not exist
-at run time, and `sop.Value` does; only a `type` statement can build an alias
-that refers to itself, so the extension has no way to emit one and this is the
-only place the object can come from.  The two spellings have to agree."""
+It is spelled here rather than in `_core.pyi` because this is the only place
+the object can come from.  A stub does not exist at run time and `sop.Value`
+does; only a `type` statement can build an alias that refers to itself, so the
+extension has no way to emit one.  The stub imports this name back for its own
+signatures, so there is one definition and nothing to keep in step.
 
-
-class ShapeError(SopError):
-    """The document parsed, but does not have the requested shape.
-
-    A subclass of `SopError`, so one `except` covers both failure modes."""
-
-    def __init__(self, path: str, message: str) -> None:
-        super().__init__(f"{path}: {message}")
-        self.message = message
-        # A parse error carries a position; a shape error has none, but the
-        # attributes exist on every SopError, as the stubs promise.
-        self.line = 0
-        self.column = 0
+`Tagged[Value]`, not a bare `Tagged`: bare would lean on the parameter's
+default, which is this alias, and resolving that default across the import
+means finishing this definition first.  Naming the payload asks nothing of the
+default, so the cycle has nothing left to resolve."""
 
 
 def _origin(shape: TypeForm[Any]) -> type | None:
@@ -541,7 +532,7 @@ def convert(obj: object) -> Spelled:
         return _spell_array(sorted(obj, key=repr), cls)
     if _is_ordered(obj):
         return _spell_array(obj, cls)
-    raise ShapeError("$", f"cannot encode {cls.__name__}")
+    raise SopError(f"cannot encode {cls.__name__}")
 
 
 def _spell_array[T](

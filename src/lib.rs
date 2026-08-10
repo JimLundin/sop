@@ -28,31 +28,78 @@ mod write;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use pyo3::create_exception;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyGenericAlias, PyType};
 
-create_exception!(_core, SopError, PyValueError);
-
-pub(crate) fn sop_error(message: String, line: usize, column: usize) -> PyErr {
-    Python::attach(|py| {
-        let text = if line == 0 {
-            message.clone()
-        } else {
-            format!("{line}:{column}: {message}")
-        };
-        let err = SopError::new_err(text);
-        let value = err.value(py);
-        let _ = value.setattr("message", message);
-        let _ = value.setattr("line", line);
-        let _ = value.setattr("column", column);
-        err
-    })
+#[pyclass(extends = PyValueError, subclass, module = "sop._core")]
+pub(crate) struct SopError {
+    #[pyo3(get)]
+    message: String,
 }
 
+#[pymethods]
+impl SopError {
+    #[new]
+    fn new(message: String) -> Self {
+        Self { message }
+    }
+    fn __str__(&self) -> String {
+        self.message.clone()
+    }
+}
+
+#[pyclass(extends = SopError, module = "sop._core")]
+pub(crate) struct ParseError {
+    #[pyo3(get)]
+    line: usize,
+    #[pyo3(get)]
+    column: usize,
+}
+
+#[pymethods]
+impl ParseError {
+    #[new]
+    fn new(message: String, line: usize, column: usize) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(SopError { message }).add_subclass(Self { line, column })
+    }
+    // `PyRef` by value is the only receiver that reaches the base class, and
+    // pyo3 does not accept it by reference; the message lives there.
+    #[allow(clippy::needless_pass_by_value)]
+    fn __str__(slf: PyRef<'_, Self>) -> String {
+        format!("{}:{}: {}", slf.line, slf.column, slf.as_super().message)
+    }
+}
+
+#[pyclass(extends = SopError, module = "sop._core")]
+pub(crate) struct ShapeError {
+    #[pyo3(get)]
+    path: String,
+}
+
+#[pymethods]
+impl ShapeError {
+    #[new]
+    fn new(path: String, message: String) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(SopError { message }).add_subclass(Self { path })
+    }
+    // `PyRef` by value is the only receiver that reaches the base class, and
+    // pyo3 does not accept it by reference; the message lives there.
+    #[allow(clippy::needless_pass_by_value)]
+    fn __str__(slf: PyRef<'_, Self>) -> String {
+        format!("{}: {}", slf.path, slf.as_super().message)
+    }
+}
+
+/// A read error, at the position in the text where reading stopped.
+pub(crate) fn sop_error(message: String, line: usize, column: usize) -> PyErr {
+    PyErr::new::<ParseError, _>((message, line, column))
+}
+
+/// A write error, which has no location: nothing was being read, and the
+/// writer does not track where in the value it is.
 pub(crate) fn ser_error(message: String) -> PyErr {
-    sop_error(message, 0, 0)
+    PyErr::new::<SopError, _>((message,))
 }
 
 /// CPython's recursion guard, entered once per parse or emit frame and left
@@ -235,5 +282,5 @@ fn dumps(value: &Bound<'_, PyAny>, convert: &Bound<'_, PyAny>) -> PyResult<Strin
 #[pymodule]
 mod _core {
     #[pymodule_export]
-    use super::{SopError, Symbol, Tagged, dumps, loads};
+    use super::{ParseError, ShapeError, SopError, Symbol, Tagged, dumps, loads};
 }
