@@ -509,7 +509,12 @@ def convert(obj: object) -> Spelled:
     The core knows only the immutable values reading produces, so the mutable
     counterparts are frozen here and spell identically.  Past that, precedence
     mirrors reading: an enum is a symbol, a dataclass is an object, and any
-    other class with a tag is a tagged string spelled with `str(obj)`."""
+    other class with a tag is a tagged string spelled with `str(obj)`.
+
+    A failure here is a `SopError` and not a `ShapeError`, because this is
+    handed one object and has no idea where in the graph it sits.  The core
+    is the one walking, so the core is what turns it into a `ShapeError` at
+    the path it had reached."""
     if isinstance(obj, enum.Enum):
         return Symbol(_enum_spelling(obj))
     # Every remaining question is asked of the class.  A dataclass *class*

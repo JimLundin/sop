@@ -96,10 +96,11 @@ pub(crate) fn sop_error(message: String, line: usize, column: usize) -> PyErr {
     PyErr::new::<ParseError, _>((message, line, column))
 }
 
-/// A write error, which has no location: nothing was being read, and the
-/// writer does not track where in the value it is.
-pub(crate) fn ser_error(message: String) -> PyErr {
-    PyErr::new::<SopError, _>((message,))
+/// A write error, at the path into the value where writing stopped. The
+/// same spelling the reader uses, so a value that fails to write and a
+/// document that fails to read name the place the same way.
+pub(crate) fn ser_error(path: String, message: String) -> PyErr {
+    PyErr::new::<ShapeError, _>((path, message))
 }
 
 /// CPython's recursion guard, entered once per parse or emit frame and left
@@ -271,7 +272,7 @@ fn loads(py: Python<'_>, text: &str) -> PyResult<Py<PyAny>> {
 #[pyfunction]
 fn dumps(value: &Bound<'_, PyAny>, convert: &Bound<'_, PyAny>) -> PyResult<String> {
     let mut writer = write::Writer::new(convert);
-    writer.emit(value, false, true)?;
+    writer.dump(value)?;
     Ok(writer.out)
 }
 

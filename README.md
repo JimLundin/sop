@@ -78,11 +78,14 @@ by the shape layer on the way out, and a value that came from `loads` is
 written without touching Python at all.
 
 The whole public API is eight names: `loads`, `dumps`, `Value`, `Symbol`,
-`Tagged`, and three errors. `SopError` is the base and catches everything;
-it is raised on its own only when writing, where a failure has no location.
-Reading has two, and each carries the one location it actually has:
-`ParseError` a `line` and `column` in the text, `ShapeError` a `path` into
-the value. Neither invents the other's.
+`Tagged`, and three errors. `SopError` is the base, so one `except` catches
+everything; the two below it each carry the one location they have, and
+neither invents the other's. `ParseError` has a `line` and `column` in the
+text. `ShapeError` has a `path` into the value — `$.orders[1].customer` —
+and is raised in both directions, whether the value read back does not fit
+the shape or the object written has no sop spelling. The path is assembled
+as the error leaves the traversal, so nothing pays for it until something
+fails.
 
 The subscript is annotated `TypeForm[T]` (PEP 747), so shapes that are not
 classes work too — `sop.loads[Order | None](text)` reveals as `Order | None`,

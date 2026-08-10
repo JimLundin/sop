@@ -9,13 +9,14 @@
 //! writer cannot classify, its head only with its children untouched, inside
 //! this same traversal, so the graph is walked exactly once.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyFloat, PyFrozenDict, PyFrozenDictMethods, PyInt, PyString, PyTuple};
 
 use crate::text::{escape_string, is_identifier, write_f64};
-use crate::{Recursion, Symbol, Tagged, ser_error};
+use crate::{Recursion, ShapeError, SopError, Symbol, Tagged, ser_error};
 
 /// What kind of sop value an object is, and the object itself.
 ///
@@ -80,6 +81,32 @@ fn classify<'py>(value: &Bound<'py, PyAny>) -> Option<Classified<'py>> {
     None
 }
 
+/// Name one step of the place an error happened.
+///
+/// The path is assembled on the way out rather than carried on the way in:
+/// each frame the error passes through prepends the step it took, so only a
+/// write that actually fails pays for knowing where. Carrying a path down
+/// the descent instead would charge every value written for the few that
+/// fail -- and it is the cheapest values, the elements of a flat array, that
+/// it would charge the most.
+///
+/// Anything that is not one of the writer's own errors passes through
+/// untouched: a `ValueError` from `Symbol`, a `RecursionError` from the
+/// guard, whatever else the hook raised.
+fn at(py: Python<'_>, err: PyErr, segment: &str) -> PyErr {
+    if !err.is_instance_of::<ShapeError>(py) {
+        return err;
+    }
+    let value = err.value(py);
+    match (
+        value.getattr("path").and_then(|p| p.extract::<String>()),
+        value.getattr("message").and_then(|m| m.extract::<String>()),
+    ) {
+        (Ok(path), Ok(message)) => ser_error(format!("{segment}{path}"), message),
+        _ => err,
+    }
+}
+
 pub(crate) struct Writer<'a, 'py> {
     pub(crate) out: String,
     convert: &'a Bound<'py, PyAny>,
@@ -90,6 +117,32 @@ impl<'a, 'py> Writer<'a, 'py> {
         Writer {
             out: String::new(),
             convert,
+        }
+    }
+
+    /// Spell the whole value. The root is the last step named, so a failure
+    /// at the top level reads `$` and one below it reads `$.orders[2]`.
+    pub(crate) fn dump(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.emit(value, false, true)
+            .map_err(|err| at(value.py(), err, "$"))
+    }
+
+    /// A failure at the value being written now, which names no place yet:
+    /// the frames it unwinds through are what know where that is.
+    fn err<T>(&self, message: String) -> PyResult<T> {
+        Err(ser_error(String::new(), message))
+    }
+
+    /// A hook failure becomes the writer's own, so that it too collects a
+    /// path on the way out. `convert` is handed a single object and cannot
+    /// know where in the graph it sits.
+    fn locate(&self, py: Python<'_>, err: PyErr) -> PyErr {
+        if !err.get_type(py).is(py.get_type::<SopError>()) {
+            return err;
+        }
+        match err.value(py).getattr("message").and_then(|m| m.extract()) {
+            Ok(message) => ser_error(String::new(), message),
+            Err(_) => err,
         }
     }
 
@@ -114,9 +167,12 @@ impl<'a, 'py> Writer<'a, 'py> {
         let _guard = Recursion::enter(py, c" while writing sop")?;
         let Some(kind) = classify(value) else {
             if !may_convert {
-                return Err(ser_error(format!("not a sop value: {}", value.repr()?)));
+                return self.err(format!("not a sop value: {}", value.repr()?));
             }
-            let converted = self.convert.call1((value,))?;
+            let converted = self
+                .convert
+                .call1((value,))
+                .map_err(|err| self.locate(py, err))?;
             return self.emit(&converted, under_tag, false);
         };
         match kind {
@@ -141,9 +197,11 @@ impl<'a, 'py> Writer<'a, 'py> {
                 // and the parser rejects the escape for the same reason.
                 // Refuse it as a SopError rather than leaking the codec's
                 // UnicodeEncodeError.
-                let text = s.to_cow().map_err(|_| {
-                    ser_error("string contains a lone surrogate, which sop text cannot hold".into())
-                })?;
+                let Ok(text) = s.to_cow() else {
+                    return self.err(
+                        "string contains a lone surrogate, which sop text cannot hold".into(),
+                    );
+                };
                 escape_string(&text, &mut self.out);
             }
             // Python integers are unbounded; the format's numeric domain is
@@ -156,15 +214,15 @@ impl<'a, 'py> Writer<'a, 'py> {
                     let _ = write!(self.out, "{v}");
                 }
                 Err(_) => {
-                    return Err(ser_error(format!(
+                    return self.err(format!(
                         "{} is out of range for sop's numeric domain; use a tagged string",
                         i.str()?.to_cow()?
-                    )));
+                    ));
                 }
             },
             Classified::Float(f) if f.is_finite() => write_f64(f, &mut self.out),
             Classified::Float(f) => {
-                return Err(ser_error(format!("{f} has no sop representation")));
+                return self.err(format!("{f} has no sop representation"));
             }
             Classified::Tagged(tagged) => {
                 let tagged = tagged.get();
@@ -178,7 +236,8 @@ impl<'a, 'py> Writer<'a, 'py> {
                     if i > 0 {
                         self.out.push(',');
                     }
-                    self.emit(&item, false, true)?;
+                    self.emit(&item, false, true)
+                        .map_err(|err| at(py, err, &format!("[{i}]")))?;
                 }
                 self.out.push(']');
             }
@@ -188,9 +247,15 @@ impl<'a, 'py> Writer<'a, 'py> {
                     if i > 0 {
                         self.out.push(',');
                     }
-                    self.write_key(&key)?;
+                    let text = self.key_text(&key)?;
+                    if is_identifier(&text) {
+                        self.out.push_str(&text);
+                    } else {
+                        escape_string(&text, &mut self.out);
+                    }
                     self.out.push(':');
-                    self.emit(&item, false, true)?;
+                    self.emit(&item, false, true)
+                        .map_err(|err| at(py, err, &format!(".{text}")))?;
                 }
                 self.out.push('}');
             }
@@ -200,34 +265,27 @@ impl<'a, 'py> Writer<'a, 'py> {
 
     fn refuse_tagged_symbol(&self, under_tag: bool, name: &str) -> PyResult<()> {
         if under_tag {
-            return Err(ser_error(format!(
+            return self.err(format!(
                 "a tag cannot be applied to a bare symbol (`{name}`)"
-            )));
+            ));
         }
         Ok(())
     }
 
-    /// An object key. Exact `str` only: under the protocol a str subclass
+    /// An object key's spelling, which the caller writes and then extends
+    /// the path with. Exact `str` only: under the protocol a str subclass
     /// carries a tag, and a key has nowhere to put one, so accepting it here
-    /// would drop the tag silently. Written bare when its spelling is an
-    /// identifier, quoted otherwise.
-    fn write_key(&mut self, key: &Bound<'_, PyAny>) -> PyResult<()> {
+    /// would drop the tag silently.
+    fn key_text<'k>(&self, key: &'k Bound<'_, PyAny>) -> PyResult<Cow<'k, str>> {
         match key.cast_exact::<PyString>() {
-            Ok(key) => {
-                let key = key
-                    .to_cow()
-                    .map_err(|_| ser_error("object key contains a lone surrogate".to_string()))?;
-                if is_identifier(&key) {
-                    self.out.push_str(&key);
-                } else {
-                    escape_string(&key, &mut self.out);
-                }
-                Ok(())
-            }
-            Err(_) if key.is_instance_of::<PyString>() => Err(ser_error(
+            Ok(key) => match key.to_cow() {
+                Ok(text) => Ok(text),
+                Err(_) => self.err("object key contains a lone surrogate".to_string()),
+            },
+            Err(_) if key.is_instance_of::<PyString>() => self.err(
                 "a subclass of str carries a tag, which an object key cannot hold".to_string(),
-            )),
-            Err(_) => Err(ser_error("object keys must be strings".to_string())),
+            ),
+            Err(_) => self.err("object keys must be strings".to_string()),
         }
     }
 }

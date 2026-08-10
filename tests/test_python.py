@@ -211,12 +211,46 @@ def test_every_error_survives_a_round_trip():
             act()
         raised.append(caught.value)
 
-    assert [type(e) for e in raised] == [sop.ParseError, sop.ShapeError, sop.SopError]
+    assert [type(e) for e in raised] == [
+        sop.ParseError,
+        sop.ShapeError,
+        sop.ShapeError,
+    ]
     for error in raised:
         copy = pickle.loads(pickle.dumps(error))
         assert type(copy) is type(error)
         assert str(copy) == str(error)
         assert copy.message == error.message
+
+
+def test_a_write_error_names_where_in_the_value_it_failed():
+    # The path is assembled as the error leaves the traversal, so it reads
+    # exactly as the reader's does -- and costs nothing when nothing fails.
+    @dataclass
+    class Customer:
+        ref: object
+
+    @dataclass
+    class Order:
+        customer: Customer
+
+    with pytest.raises(sop.ShapeError) as caught:
+        sop.dumps({"orders": [Order(Customer("fine")), Order(Customer(object()))]})
+    assert caught.value.path == "$.orders[1].customer.ref"
+    assert str(caught.value).startswith("$.orders[1].customer.ref: cannot encode")
+
+    # A failure at the top level is still named.
+    with pytest.raises(sop.ShapeError) as bare:
+        sop.dumps(object())
+    assert bare.value.path == "$"
+
+
+def test_a_non_sop_error_from_the_hook_passes_through_unlocated():
+    # Only the writer's own errors collect a path; `Tagged` refusing a bare
+    # symbol is a plain ValueError and the writer does not restate it.
+    with pytest.raises(ValueError, match="bare symbol") as caught:
+        sop.dumps({"a": [sop.Tagged("T", None)]})
+    assert not isinstance(caught.value, sop.SopError)
 
 
 def test_each_error_carries_only_the_location_it_has():
@@ -261,9 +295,8 @@ def test_a_type_alias_is_its_right_hand_side():
 
 def test_unencodable_object():
     # The core rejects it first and asks the shape layer, which rejects it
-    # too; writing has neither a position nor a path, so it is a plain
-    # SopError -- and `except SopError` is what catches every failure anyway.
-    with pytest.raises(sop.SopError, match="cannot encode object"):
+    # too; the core is what was walking, so the core is what says where.
+    with pytest.raises(sop.ShapeError, match=r"^\$: cannot encode object"):
         sop.dumps(object())
 
 
@@ -463,7 +496,7 @@ def test_an_object_of_the_wrong_shape_reports_the_missing_key():
 
 
 def test_an_unknown_python_object_is_described_by_its_type():
-    with pytest.raises(sop.SopError, match="cannot encode complex"):
+    with pytest.raises(sop.ShapeError, match="cannot encode complex"):
         sop.dumps(1 + 2j)
 
 
