@@ -189,6 +189,41 @@ def test_set_output_is_deterministic():
     assert sop.dumps(values) == sop.dumps(set(reversed(list(values))))
 
 
+def test_set_output_does_not_depend_on_how_the_elements_repr():
+    # The order has to come from what the values *spell as*.  `repr` is not
+    # that: a class which does not define one gets the default, which spells
+    # the object's address, so the same set writes in a different order in
+    # the next process.  This `__repr__` stands in for that -- it disagrees
+    # with the spelling in a way an address does by accident.
+    class Thing:
+        __sop_tag__ = "Thing"
+
+        def __init__(self, n: int) -> None:
+            self.n = n
+
+        def __str__(self) -> str:
+            return str(self.n)
+
+        def __repr__(self) -> str:
+            # Sorts opposite to the spelling, as an address does whenever the
+            # allocator happens to hand these out in a different order.
+            return "cba"[self.n - 1]
+
+    assert sop.dumps({Thing(2), Thing(1), Thing(3)}) == (
+        'Set [Thing "1",Thing "2",Thing "3"]'
+    )
+
+
+def test_a_set_element_with_no_spelling_is_still_named_where_it_sits():
+    # Ordering the elements asks each of them how it spells, and this one has
+    # no answer.  The failure is left to the traversal, which is the thing
+    # that knows where in the document the set sits.
+    with pytest.raises(sop.ShapeError) as caught:
+        sop.dumps({"roles": {object()}})
+    assert caught.value.path == "$.roles[0]"
+    assert "cannot encode object" in caught.value.message
+
+
 def test_frozenset_writes_the_same_way():
     # The wire says unordered; whether the Python value can be mutated is the
     # shape's business, exactly as with `list[T]` and `tuple[T, ...]`.
@@ -490,13 +525,22 @@ def test_tagged_union_discriminates_on_the_tag():
 
 
 def test_tagged_union_names_the_alternatives():
-    with pytest.raises(sop.ShapeError, match="`Deposit`, `Withdraw`"):
+    # Spelled out in full -- and only here.  The list of alternatives is
+    # built in the `raise`, so a value whose tag matches never pays to say
+    # what it could have been instead.
+    with pytest.raises(sop.ShapeError) as caught:
         sop.loads[Deposit | Withdraw]("Other { atm: 1 }")
+    assert str(caught.value) == (
+        "$: unknown tag `Other`; expected one of `Deposit`, `Withdraw`"
+    )
 
 
 def test_tagged_union_rejects_an_untagged_value():
-    with pytest.raises(sop.ShapeError, match="expected a value tagged"):
+    with pytest.raises(sop.ShapeError) as caught:
         sop.loads[Deposit | Withdraw]("{ atm: 1 }")
+    assert str(caught.value) == (
+        "$: expected a value tagged `Deposit`, `Withdraw`, found an object"
+    )
 
 
 def test_untagged_union_tries_each_member():

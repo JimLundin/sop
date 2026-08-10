@@ -44,6 +44,7 @@ from collections.abc import Callable, Iterable, Set
 from typing import Any, TypeForm, TypeIs, get_args, get_origin
 
 from ._core import ShapeError, SopError, Symbol, Tagged
+from ._core import dumps as _dumps
 
 type Value = (
     None
@@ -405,6 +406,14 @@ def _name_of(shape: TypeForm[Any]) -> str:
     return getattr(shape, "__name__", None) or str(shape)
 
 
+def _expected(tags: Iterable[str]) -> str:
+    """The tags a union can be spelled with, for an error message.  Built in
+    the `raise` and nowhere else: on the way through, the tag is found and
+    this is never asked -- and a value that decodes should not pay to say
+    what it could have been instead."""
+    return ", ".join(f"`{tag}`" for tag in sorted(tags))
+
+
 def _union(value: Value, members: tuple[TypeForm[Any], ...], path: str) -> Any:
     if types.NoneType in members and value is None:
         return None
@@ -434,14 +443,17 @@ def _union(value: Value, members: tuple[TypeForm[Any], ...], path: str) -> Any:
     if len(tagged) == len(members):
         # Every member is tagged, so the tag decides and a mismatch is a real
         # error rather than one failed attempt out of several.
-        expected = ", ".join(f"`{t}`" for t in sorted(tagged))
         if not isinstance(value, Tagged):
             raise ShapeError(
-                path, f"expected a value tagged {expected}, found {_describe(value)}"
+                path,
+                f"expected a value tagged {_expected(tagged)}, "
+                f"found {_describe(value)}",
             )
         if (chosen := tagged.get(value.tag)) is not None:
             return _decode(value, chosen, path)
-        raise ShapeError(path, f"unknown tag `{value.tag}`; expected one of {expected}")
+        raise ShapeError(
+            path, f"unknown tag `{value.tag}`; expected one of {_expected(tagged)}"
+        )
 
     # In a mixed union a recognised tag still decides; anything else tries
     # each member in order.
@@ -561,12 +573,34 @@ def convert(obj: object) -> Spelled:
     if _is_object(obj):
         return frozendict(obj)
     if _is_unordered(obj):
-        # Sorted because an array is ordered and a set is not: one order is
-        # chosen and kept to, or the same value would not write the same twice.
-        return _spell_array(sorted(obj, key=repr), cls)
+        # An array is ordered and a set is not, so an order has to be chosen:
+        # what the elements themselves spell as.
+        return _spell_array(sorted(obj, key=_spelling), cls)
     if _is_ordered(obj):
         return _spell_array(obj, cls)
     raise SopError(f"cannot encode {cls.__name__}")
+
+
+def _spelling(value: object) -> str:
+    """A value's own sop text, which is the order a set is written in.
+
+    The order has to be a property of the values, or the same set would not
+    write the same twice -- and `repr` is not one.  A class that does not
+    define `__repr__` gets the default, which spells the object's address, so
+    sorting on it puts the same four values in a different order in the next
+    process.  What a value spells as is the one key that is both total over
+    everything writable and the same every time.
+
+    It costs a second pass over the set's elements, which is what buying an
+    order that is theirs and not their allocator's costs."""
+    try:
+        return _dumps(value, convert)
+    except SopError:
+        # No spelling at all.  The traversal is about to fail on this element
+        # anyway, and it is the one that knows where in the document it sits,
+        # so the failure is left to it.  Ordering these together is immaterial
+        # when the write cannot finish.
+        return ""
 
 
 def _spell_array[T](
