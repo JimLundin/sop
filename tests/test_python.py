@@ -10,8 +10,10 @@ import copy
 import enum
 import gc
 import math
+import os
 import pickle
 import re
+import subprocess
 import sys
 import types
 import weakref
@@ -163,6 +165,41 @@ def test_tagged_hashes_like_a_frozen_dataclass():
     # dataclass's field would.
     with pytest.raises(TypeError):
         hash(sop.Tagged("a", [1]))
+
+
+def test_tagged_hashes_as_the_same_number_a_frozen_dataclass_would():
+    # Not merely "agrees with `__eq__`" -- the same number, because it *is*
+    # the hash of `(tag, value)`.  A hash mixed together in the extension
+    # would satisfy `__eq__` just as well and still be wrong here.
+    @dataclass(frozen=True)
+    class Fields:
+        tag: str
+        value: object
+
+    for tag, payload in (("a", 1), ("T", "x"), ("Deposit", (1, 2))):
+        assert hash(sop.Tagged(tag, payload)) == hash(Fields(tag, payload))
+        # And this is only ever equal if the tag went through Python's own
+        # `str` hash, which is seeded per process -- see below.
+        assert hash(sop.Tagged(tag, payload)) == hash((tag, payload))
+
+
+def test_a_tag_does_not_hash_the_same_in_every_process():
+    # Hash randomisation is what stops keys taken from a document being made
+    # to collide, and tags are taken from documents.  A hash of the SDK's own
+    # would answer the same number in every process, so an attacker could
+    # work the colliding tags out in advance.
+    reading = 'from sop import Tagged; print(hash(Tagged("a", 1)))'
+    seen = {
+        subprocess.run(
+            [sys.executable, "-c", reading],
+            env={**os.environ, "PYTHONHASHSEED": seed},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        for seed in ("1", "2", "3")
+    }
+    assert len(seen) == 3
 
 
 def test_every_value_survives_copying_and_pickling():

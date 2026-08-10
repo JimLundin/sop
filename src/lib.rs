@@ -26,8 +26,6 @@ mod parse;
 mod text;
 mod write;
 
-use std::hash::{DefaultHasher, Hash, Hasher};
-
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyGenericAlias, PyType};
@@ -264,18 +262,21 @@ impl Tagged {
         Ok(PyBool::new(py, equal).to_owned().into_any().unbind())
     }
 
-    /// A frozen dataclass's hash, over `(tag, value)`. Delegating to the
-    /// payload's own hash keeps the contract with `__eq__`: equal values hash
-    /// equal, and an unhashable payload makes the whole value unhashable
-    /// rather than quietly hashable by identity.
-    // Truncating on a 32-bit target and wrapping into the sign bit are both
-    // fine: a hash only has to be deterministic and agree with `__eq__`.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    /// A frozen dataclass's hash, which is the hash of its fields as a
+    /// tuple. Built as that tuple rather than mixed together here, so it is
+    /// that hash and not merely something like it -- and so it is seeded the
+    /// way the interpreter seeds every other hash.
+    ///
+    /// Mixing it here with a hasher of our own would answer the same number
+    /// in every process, because a tag is Rust's `String` and never reaches
+    /// Python's randomised `str` hash. Tags come out of documents, so that
+    /// is a set of colliding keys an attacker can work out in advance.
+    ///
+    /// Delegating to the payload's own hash keeps the contract with `__eq__`:
+    /// equal values hash equal, and an unhashable payload makes the whole
+    /// value unhashable rather than quietly hashable by identity.
     fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
-        let mut hasher = DefaultHasher::new();
-        self.tag.hash(&mut hasher);
-        self.value.bind(py).hash()?.hash(&mut hasher);
-        Ok(hasher.finish() as isize)
+        (&self.tag, &self.value).into_pyobject(py)?.hash()
     }
 }
 
