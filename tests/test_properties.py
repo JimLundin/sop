@@ -14,17 +14,8 @@ from typing import Any, TypeForm
 
 import pytest
 import sop
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
-
-settings.register_profile(
-    "sop",
-    max_examples=400,
-    deadline=None,  # the first call pays for the extension's import
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.load_profile("sop")
-
 
 # ---------------------------------------------------------------------------
 # Strategies

@@ -67,8 +67,21 @@ jobs:
       - name: stubtest
         run: stubtest sop._core --ignore-missing-stub
 
+      # The suite includes `tests/test_typing.py`, which runs mypy, pyright
+      # and pyrefly over the typing corpus as subprocesses -- so the toolchain
+      # installed above is what it checks against, and a checker that is not
+      # installed is skipped rather than assumed clean.
       - name: pytest
-        run: pytest
+        run: pytest -rs
+
+      # The soundness properties again, with enough examples to reach the
+      # corners of the shape language -- a shape is drawn, a document is drawn
+      # without reference to it, and what decodes has to be what the shape
+      # said.  A second run rather than a bigger default, because the suite is
+      # what a developer runs on every change and this is what a machine has
+      # time for.  `--no-cov`: coverage is the run above's gate, not this one's.
+      - name: type soundness
+        run: pytest tests/test_soundness.py --hypothesis-profile=deep --no-cov
 
       # Advisory, as the README says: pyright's PEP 747 support does not yet
       # accept a union as a `TypeForm`, so the shape layer reads as errors to

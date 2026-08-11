@@ -24,6 +24,7 @@ dev = [
     "hypothesis",
     "maturin",
     "mypy",
+    "pyrefly",
     "pyright",
     "pytest",
     "pytest-cov",
@@ -33,7 +34,18 @@ dev = [
 [tool.ruff.lint]
 select = ["E", "F", "B", "I", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# The typing corpus writes the older spellings on purpose -- `Optional`,
+# `Union`, an explicit `TypeAliasType`, a quoted annotation -- because they are
+# what it is there to check.  Rewriting them to the modern ones would delete
+# the cases.
+"tests/typing_corpus.py" = ["UP007", "UP037", "UP040", "UP045"]
+
 [tool.mypy]
+# The package only.  `tests/typing_corpus.py` is checked by mypy just as
+# strictly, but by `tests/test_typing.py` rather than here: one of its lines
+# is a diagnostic the corpus expects, which this gate could only call a
+# failure.
 files = ["python/sop"]
 strict = true
 

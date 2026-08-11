@@ -333,8 +333,15 @@ def _decode_parameterised(
                 raise ShapeError(
                     path, f"expected an array tagged `{tag}`, found {_describe(value)}"
                 )
-            decoded = (_decode(v, item, f"{path}[]") for v in _array(value.value, path))
-            return set(decoded) if origin is set else frozenset(decoded)
+            decoded = [_decode(v, item, f"{path}[]") for v in _array(value.value, path)]
+            try:
+                return set(decoded) if origin is set else frozenset(decoded)
+            except TypeError as exc:
+                # A shape whose elements a set cannot hold -- `set[list[int]]`,
+                # or a set of a dataclass that is not frozen.  Decoded first and
+                # built after, so an element's own failure stays its own error
+                # and only the building is caught here.
+                raise ShapeError(path, f"unsupported shape {shape!r}: {exc}") from None
         case _, (item,) if origin is Tagged:
             if not isinstance(value, Tagged):
                 raise ShapeError(

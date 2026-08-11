@@ -15,6 +15,14 @@ accepts**, and the tests are where that is written down:
 - `tests/test_python.py` — the semantics that exist only on the Python side.
 - `tests/test_properties.py` — Hypothesis properties: round trips, robustness
   against arbitrary input, typed round trips per shape.
+- `tests/test_soundness.py` — the shape language as a claim rather than a list
+  of cases: a second, independent reading of what each shape means, Hypothesis
+  driving arbitrary documents at arbitrary shapes to look for one that decodes
+  into something the shape did not say, and the boundary of the language —
+  what is a shape and what is refused — written out row by row.
+- `tests/typing_corpus.py` — the same claim as a type checker sees it: every
+  shape a user can write, what it reveals, and which checkers report what on
+  it. `tests/test_typing.py` runs each of them over it and holds it to that.
 
 A quick tour of the syntax is in `tests/test_corpus.py`'s valid cases; every
 construct the format has appears there with its canonical spelling.
@@ -155,9 +163,23 @@ meant to be paid back: user classes and subtypes are things to add later.
 | `Enum` | a symbol, matched on its spelling |
 | a privileged class | `Name "…"` — the five above, matched exactly |
 | `str` | a string, never a symbol |
+| `int` | a number spelled with digits alone |
+| `float` | a number, read as a float however it was spelled |
+| `bool` | the symbol `true` or the symbol `false` |
+| `None` | the symbol `null` |
+| `sop.Symbol` | a symbol, as itself |
 | `sop.Tagged[V]` | a tagged value whose payload has shape `V`, tag preserved |
 | `sop.Tagged` | the same with `V` defaulted — any payload |
+| `sop.Value` | whatever was there, typed as the domain reading produces |
 | `Any` | whatever was there |
+| `type X = ...` | whatever the alias denotes |
+
+Everything Python's type language has and this table does not — `Literal`,
+`Annotated`, a `TypedDict`, a bare `list`, `tuple[int, str]`, a `Protocol` — is
+refused the same way a document that does not fit is, with a `ShapeError`
+naming the shape at the path it was asked for. So is a shape whose values
+Python could not build: `set[list[int]]` is a set of lists, which a set cannot
+hold. `tests/test_soundness.py` has the enumeration.
 
 Number kind is spelling-determined — digits alone denote an integer, a point
 or an exponent a float — and writing preserves it, the sign of `-0.0`
@@ -235,6 +257,12 @@ tests/test_python.py      Python semantics: host types, native types, equality,
                           numeric limits, the single-traversal write path
 tests/test_properties.py  Hypothesis property tests: round trips, robustness,
                           typed round trips per shape
+tests/test_soundness.py   soundness of `loads[S] -> S`, and what the shape
+                          language covers of Python's type language
+tests/typing_corpus.py    every shape as a type checker sees it: what it
+                          reveals, and where the checkers differ
+tests/test_typing.py      runs mypy, pyright and pyrefly over that corpus
+tests/conftest.py         the Hypothesis profiles the suite is run under
 ```
 
 ## Running things
@@ -248,6 +276,8 @@ uv pip install .                               # or: the wheel, via maturin buil
 cargo fmt --check                              # the crate's own two gates,
 cargo clippy --all-targets -- -D warnings      # pedantic, and warnings are errors
 pytest                                         # tests + branch coverage, 100% enforced
+pytest tests/test_soundness.py \
+  --hypothesis-profile=deep --no-cov           # the soundness properties, deeper
 ruff check --fix . && ruff format .            # lint and format
 mypy                                           # strict; the gate, configured in pyproject.toml
 stubtest sop._core --ignore-missing-stub       # the hand-written stubs against the module
@@ -262,14 +292,54 @@ is reported without waiting on a compile.
 nothing else compares it to the module it describes -- a stub that claims
 less than the runtime enforces is a check that passes on code which crashes.
 
-mypy is the gate. pyright is configured and worth running, but it is
-advisory for now: its PEP 747 `TypeForm` support does not yet accept a union
-(`sop.loads[Order | None]` is reported as an error at the call site) and it
-resolves `type[T]` to `object`'s constructor, so the shape layer's own
-generics read as errors to it. Bending the code to suit that would cost more
-than it buys.
+### Type checkers
+
+`loads[S]` is a subscript whose argument is a type expression, and PEP 747 is
+what makes that legal: the checker converts the expression to a `TypeForm[S]`
+and solves `S` from it. That conversion is new and the checkers are not in the
+same place with it, so the table below is measured rather than remembered —
+`tests/typing_corpus.py` is one file of every shape a user can write and
+`tests/test_typing.py` runs each checker over it on every test run.
+
+| the shape as written | mypy | pyright | pyright + experimental | pyrefly |
+|---|---|---|---|---|
+| a class, `list[int]`, `sop.Tagged[int]` | yes | yes | yes | yes |
+| `None` | yes | no | no | yes |
+| `Order \| None`, `A \| B` | yes | no | no | yes |
+| `type X = ...`, `sop.Value` | yes | no | no | no |
+| any of those passed to a function | yes | no | yes | yes |
+
+pyright applies the conversion to the argument of a *call* and not to the
+argument of a *subscript*, in either configuration;
+`enableExperimentalFeatures` turns on the call case and `TypeForm(...)` with
+it, which is why only the last row moves. So somebody running pyright over
+`sop.loads[Order | None](text)` is told `reportArgumentType` and handed an
+`Unknown`. Nothing on this side fixes that — the same shape handed to a
+function is accepted, so it is the syntax pyright has not reached yet and not
+anything about the signature. The corpus pins it either way: the day pyright
+reads a subscript, the expectation stops matching and this paragraph goes.
+
+`ty` is not in the table because `typing.TypeForm` is not in its stdlib stubs
+yet, so it cannot read the signature at all.
+
+mypy is the gate, and the corpus is checked by it as strictly as the package
+is. pyright is worth running and stays advisory: it reports five things about
+`python/sop`, of which three are its bundled typeshed not yet having 3.15's
+`frozendict` constructor — `pyright --typeshedpath` at a newer copy clears
+them — and two are strict-mode lints, one about a `match` that is exhaustive
+by a `raise` after it and one about `shape is None`, which pyright believes a
+`TypeForm[Any]` cannot be and which the format's own `None` shape needs.
 
 Coverage: 100% branch on the Python package, enforced by pytest itself
 (`--cov-fail-under=100`); the Rust implementation is exercised end to end by
 the pytest suite, the corpus and the Hypothesis properties — there is no
 Rust-only surface left to test separately.
+
+That is coverage of the code. Coverage of the *language* it implements is a
+separate question, and `tests/test_soundness.py` is where it is answered: the
+two tables above are held equal to the rows in that file by a test, so a shape
+cannot be documented without being covered, nor a class join the privileged
+five without appearing in all three places. The claim those tables make —
+`loads[S]` answers an `S` — is checked there as a property rather than a list,
+against a reading of each shape written independently of the SDK's, and CI runs
+it a second time under a deeper Hypothesis profile.
