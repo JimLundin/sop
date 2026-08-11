@@ -1,37 +1,24 @@
 """How Python types map onto sop values.
 
-A tag is a constructor, and constructors are spelled in PascalCase -- which a
-class's own name already is, so the default needs no declaration.  A class is
-carried under its own name unless it says otherwise:
+A carried class is tagged with its own name -- a dataclass, whose fields are
+declared, and the classes in `_CARRIERS`, which says how to build and spell
+them.  An enum is the exception, carried as a symbol.
 
-    class Deposit:                                         ->  Deposit { ... }
-    class Account:  __sop_tag__ = None                     ->  { ... }
-    class Ledger:   __sop_tag__ = "Book"                   ->  Book { ... }
-    class Iban(str):__sop_tag__ = "Iban"                   ->  Iban "DE89…"
+    @dataclass class Deposit: ...     ->  Deposit { ... }
+    Decimal("19.99")                  ->  Decimal "19.99"
 
-A tagged dataclass is a tagged object; anything else with a tag is a tagged
-string, built with `cls(text)` and spelled with `str(obj)`.  A type that cannot
-be built from its own spelling supplies `__sop_parse__`:
-
-    class Instant(datetime):
-        __sop_tag__ = "Instant"
-        @classmethod
-        def __sop_parse__(cls, text): return cls.fromisoformat(text)
-
-The name default carries dataclasses, whose fields are declared; any other
-class is carried only when it names a tag itself, because there is no
-declared way to spell an arbitrary object.
-
-That is the whole protocol.  No registry, no decorator, no global state, and
-no opinion about what `Decimal` or `UUID` should be called -- those are schema
-decisions and they belong to the schema.
+Everything else is refused in both directions, with no way to opt in --
+a subclass of a carried class included.  User classes and subtypes are
+things to add later, and `_CARRIERS` is where a user table would go in front
+of this one.
 
 On typing: `object` means a value whose type is not known, which is a fact
 about the value; `Any` means checking is off, which is a decision.  The two
 are not interchangeable and `Any` spreads, so it is spelled only where this
 module is genuinely dynamic -- `_decode` and `_union` answer whatever the
-shape they were handed says, and `decode` in front of them is generic, which
-is where that becomes a static type again.
+shape they were handed says, `_CARRIERS` builds and spells classes it holds
+only one entry each for, and `decode` in front of them is generic, which is
+where that becomes a static type again.
 """
 
 import builtins
@@ -41,7 +28,16 @@ import functools
 import types
 import typing
 from collections.abc import Callable, Iterable, Set
-from typing import Any, TypeForm, TypeIs, get_args, get_origin
+from datetime import date, datetime, time
+from decimal import Decimal
+from typing import (
+    Any,
+    TypeForm,
+    TypeIs,
+    get_args,
+    get_origin,
+)
+from uuid import UUID
 
 from ._core import ShapeError, SopError, Symbol, Tagged
 from ._core import dumps as _dumps
@@ -157,8 +153,8 @@ def _per_class[V](compute: Callable[[type], V]) -> Callable[[type], V]:
 
 @_per_class
 def _tag_of(cls: type[object]) -> str | None:
-    """A class's wire tag: `__sop_tag__` if set, otherwise its own name.
-    Setting it to `None` is how a class asks to be carried as a bare object.
+    """A class's wire tag, which is what a union discriminates on: its own
+    name, and nothing else decides it.
 
     `None` for everything the format spells some other way, so that what this
     names is exactly what a union can discriminate on: the builtins, because
@@ -166,13 +162,17 @@ def _tag_of(cls: type[object]) -> str | None:
     user classes waiting for a tag; enums, which are carried as symbols; and
     `Symbol`, `Tagged` and `Any`, which match on kind rather than on a tag.
 
-    A class, not a shape: only a class can name a tag, and only a class can
-    carry the answer."""
+    Every carried class therefore answers its own name -- a dataclass and a
+    privileged class alike -- which is what the places that carry one,
+    `_decode_dataclass`, `_decode_carrier` and `convert`, use directly.
+
+    A class, not a shape: only a class has a tag, and only a class can carry
+    the answer."""
     if cls.__module__ in ("builtins", "typing"):
         return None
     if issubclass(cls, (enum.Enum, Symbol, Tagged)):
         return None
-    return getattr(cls, "__sop_tag__", cls.__name__)
+    return cls.__name__
 
 
 def _array_tag(cls: type) -> str | None:
@@ -190,15 +190,21 @@ def _array_tag(cls: type) -> str | None:
     return _tag_of(cls)
 
 
-def _scalar_tag(cls: type) -> str | None:
-    """The tag for the tagged-*string* carrier: explicit `__sop_tag__` only.
+type Carriers[T] = dict[type[T], tuple[Callable[[T], str], Callable[[str], T]]]
 
-    The name default carries dataclasses, whose fields are declared and read
-    back.  An arbitrary class declares nothing, and defaulting it through
-    `str(obj)` would spell a class that never opted in as
-    `Name "<object at 0x…>"` -- so without a named tag it is not carried."""
-    tag = getattr(cls, "__sop_tag__", None)
-    return tag if isinstance(tag, str) else None
+_CARRIERS: Carriers[Any] = {
+    Decimal: (str, Decimal),
+    UUID: (str, UUID),
+    datetime: (datetime.isoformat, datetime.fromisoformat),
+    date: (date.isoformat, date.fromisoformat),
+    time: (time.isoformat, time.fromisoformat),
+}
+"""The classes carried as tagged strings: how each is spelled and built, and
+nothing about what it is called -- a carried class is tagged with its own
+name, this one included.
+
+Matched exactly.  A subclass of one of these is not carried, and is refused
+like any other class the SDK does not know."""
 
 
 @_per_class
@@ -387,10 +393,11 @@ def _decode_plain(value: Value, cls: type[object], path: str) -> Any:
         return value
     if dataclasses.is_dataclass(cls):
         return _decode_dataclass(value, cls, path)
-    # Any other class with a *declared* tag is carried as a tagged string; the
-    # builtins, the enums and the dataclasses are ruled out by now.
-    if tag := _scalar_tag(cls):
-        return _decode_scalar(value, cls, tag, path)
+    # One of the privileged few is a tagged string; the builtins, the enums
+    # and the dataclasses are ruled out by now.
+    if (carrier := _CARRIERS.get(cls)) is not None:
+        _, build = carrier
+        return _decode_carrier(value, cls.__name__, build, path)
     raise ShapeError(path, f"unsupported shape {cls!r}")
 
 
@@ -469,21 +476,36 @@ def _union(value: Value, members: tuple[TypeForm[Any], ...], path: str) -> Any:
     raise ShapeError(path, "no union member matched: " + "; ".join(reasons))
 
 
-def _decode_scalar[T](value: Value, shape: type[T], tag: str, path: str) -> T:
-    if not isinstance(value, Tagged) or value.tag != tag:
+def _untag(value: Value, tag: str, path: str) -> Value:
+    """What `tag` was applied to, or a `ShapeError` naming what was there
+    instead.  Both carried kinds go through here, so being untagged and
+    being tagged wrong are one distinction, drawn once and reported the same
+    way whichever kind was asked for."""
+    if not isinstance(value, Tagged):
         raise ShapeError(
             path, f"expected a value tagged `{tag}`, found {_describe(value)}"
         )
-    if not isinstance(value.value, str):
-        raise ShapeError(
-            path, f"`{tag}` carries a string, found {_describe(value.value)}"
-        )
-    # The class builds itself from its own spelling unless it says otherwise.
-    parse: Callable[[str], T] = getattr(shape, "__sop_parse__", shape)
+    if value.tag != tag:
+        raise ShapeError(path, f"expected tag `{tag}`, found `{value.tag}`")
+    return value.value
+
+
+def _decode_carrier[T](
+    value: Value, tag: str, build: Callable[[str], T], path: str
+) -> T:
+    """A privileged class, built out of the string its tag was applied to.
+
+    The tag rather than the class: past the table there is nothing left to
+    ask the class, because `build` is already the one thing it was consulted
+    for."""
+    text = _untag(value, tag, path)
+    if not isinstance(text, str):
+        raise ShapeError(path, f"`{tag}` carries a string, found {_describe(text)}")
     try:
-        return parse(value.value)
+        built: T = build(text)
+        return built
     except (ValueError, ArithmeticError) as exc:
-        raise ShapeError(path, f'`{tag} "{value.value}"` is not valid: {exc}') from None
+        raise ShapeError(path, f'`{tag} "{text}"` is not valid: {exc}') from None
 
 
 def _decode_enum[E: enum.Enum](value: Value, shape: type[E], path: str) -> E:
@@ -497,15 +519,9 @@ def _decode_enum[E: enum.Enum](value: Value, shape: type[E], path: str) -> E:
 
 
 def _decode_dataclass[T](value: Value, shape: type[T], path: str) -> T:
-    if tag := _tag_of(shape):
-        if not isinstance(value, Tagged):
-            raise ShapeError(
-                path, f"expected a value tagged `{tag}`, found {_describe(value)}"
-            )
-        if value.tag != tag:
-            raise ShapeError(path, f"expected tag `{tag}`, found `{value.tag}`")
-        value = value.value
-
+    # Always tagged, and always with the class's own name -- which is what
+    # `_tag_of` answers for a dataclass, and so what a union keys on.
+    value = _untag(value, shape.__name__, path)
     if not isinstance(value, frozendict):
         raise ShapeError(path, f"expected an object, found {_describe(value)}")
 
@@ -549,8 +565,8 @@ def convert(obj: object) -> Spelled:
 
     The core knows only the immutable values reading produces, so the mutable
     counterparts are frozen here and spell identically.  Past that, precedence
-    mirrors reading: an enum is a symbol, a dataclass is an object, and any
-    other class with a tag is a tagged string spelled with `str(obj)`.
+    mirrors reading: an enum is a symbol, a dataclass is a tagged object, and
+    one of the privileged classes is a tagged string.
 
     A failure here is a `SopError` and not a `ShapeError`, because this is
     handed one object and has no idea where in the graph it sits.  The core
@@ -566,10 +582,10 @@ def convert(obj: object) -> Spelled:
         body: dict[object, object] = {
             key: getattr(obj, f.name) for f, key in _fields(cls)
         }
-        tag = _tag_of(cls)
-        return Tagged(tag, frozendict(body)) if tag else frozendict(body)
-    if tag := _scalar_tag(cls):
-        return Tagged(tag, str(obj))
+        return Tagged(cls.__name__, frozendict(body))
+    if (carrier := _CARRIERS.get(cls)) is not None:
+        spell, _ = carrier
+        return Tagged(cls.__name__, spell(obj))
     if _is_object(obj):
         return frozendict(obj)
     if _is_unordered(obj):

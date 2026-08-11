@@ -91,9 +91,8 @@ The subscript is annotated `TypeForm[T]` (PEP 747), so shapes that are not
 classes work too — `sop.loads[Order | None](text)` reveals as `Order | None`,
 which the older `type[T]` spelling could never express.
 
-A tag is a constructor, and constructors are spelled in PascalCase — which
-is what a class's own name already is, so the default needs no declaration.
-A class is carried under its own name unless it says otherwise:
+A carried class is tagged with its own name. That is the whole rule, and
+nothing declares anything:
 
 ```python
 @dataclass
@@ -102,53 +101,49 @@ class Deposit:  # carried as `Deposit { ... }`
     from_: str = field(metadata={"sop": "from"})  # reads the key `from`
 
 
-@dataclass
-class Account:
-    __sop_tag__ = None  # carried as a bare `{ ... }`
-
-
-class Iban(str):
-    __sop_tag__ = "Iban"  # carried as `Iban "DE89…"`
-
-
 Event = Deposit | Withdraw | Reversal
 events = sop.loads[list[Event]](text)
 ```
 
-Builtins are exempt from the default: `str` and `list` are how the format's own
-types are spelled, not user classes waiting for a tag. The name default
-carries *dataclasses*, whose fields are declared; any other class is carried
-only if it names a tag explicitly — there is no declared way to spell an
-arbitrary object, so one that never opted in fails loudly instead of being
-written through `str`.
+Builtins are exempt: `str` and `list` are how the format's own types are
+spelled, not user classes waiting for a tag.
 
-A tagged dataclass is a tagged object; anything else with a tag is a tagged
-string, built with `cls(text)` and spelled with `str(obj)`. A type that cannot
-be built from its own spelling supplies `__sop_parse__`:
+Three kinds of class are carried and none of them declare anything — a
+dataclass, an enum, and five privileged classes, which are carried as tagged
+strings:
 
-```python
-class Money(Decimal):
-    __sop_tag__ = "Decimal"
+| Class | Carried as |
+|---|---|
+| `Decimal` | `Decimal "19.99"` |
+| `UUID` | `UUID "9f1c2e7a-…"` |
+| `datetime` | `datetime "2026-08-05T14:23:11"` |
+| `date` | `date "2026-08-05"` |
+| `time` | `time "14:23:11"` |
 
+Those five are a list of what the SDK knows how to build and spell, not a
+list of names — the name is the class's own, here as everywhere else. They
+are matched *exactly*: a subclass of one of them is not carried, and is
+refused like any other class the SDK does not know. Subtypes are a thing to
+add later.
 
-class Id(UUID):
-    __sop_tag__ = "Uuid"
+The convention that a tag is a constructor spelled in PascalCase is a
+convention: `datetime`, `date` and `time` are not, and are carried under
+those names anyway. The format asks only that a tag be an identifier.
 
+Everything else has no sop spelling and is refused in both directions. There
+is no way for a class to opt in: no dunder, no registry, no decorator, no
+global state. A class the SDK does not already know fails loudly rather than
+being written through `str`, which would carry an object that declared
+nothing as `Name "<object at 0x…>"`.
 
-class Instant(datetime):
-    __sop_tag__ = "Instant"
-
-    @classmethod
-    def __sop_parse__(cls, text):
-        return cls.fromisoformat(text)
-```
-
-The SDK has no built-in opinion about what `Decimal` or `UUID` are called on
-the wire. That is a schema decision and it belongs to the schema.
+What that costs is the choice of *which* classes can be spelled at all,
+which the SDK now makes for everyone. That is the price of the protocol
+being a list one can read rather than a contract one has to know, and it is
+meant to be paid back: user classes and subtypes are things to add later.
 
 | Shape | Reads |
 |---|---|
-| `@dataclass class X` | an object, or `X { ... }` if the class is tagged |
+| `@dataclass class X` | `X { ... }` — an object under the class's own name |
 | `list[T]` | an array |
 | `tuple[T, ...]` | an array, like `list[T]`, read back immutable |
 | `set[T]` | `Set [ ... ]` — an array tagged with what it was |
@@ -158,7 +153,7 @@ the wire. That is a schema decision and it belongs to the schema.
 | `X \| None` | the value, or the symbol `null` |
 | `A \| B \| C` | a discriminated union, keyed on the tag |
 | `Enum` | a symbol, matched on its spelling |
-| a class with `__sop_tag__` | `Tag "…"`, built with `cls(text)`, spelled with `str(obj)` |
+| a privileged class | `Name "…"` — the five above, matched exactly |
 | `str` | a string, never a symbol |
 | `sop.Tagged[V]` | a tagged value whose payload has shape `V`, tag preserved |
 | `sop.Tagged` | the same with `V` defaulted — any payload |

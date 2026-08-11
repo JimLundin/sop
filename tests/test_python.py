@@ -18,6 +18,7 @@ import sys
 import types
 import weakref
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -30,12 +31,7 @@ import sop
 
 @dataclass
 class Point:
-    __sop_tag__ = None
     x: int
-
-
-class Iban(str):
-    __sop_tag__ = "Iban"
 
 
 # ---------------------------------------------------------------------------
@@ -456,10 +452,14 @@ def test_object_keys_must_be_strings():
         sop.dumps({1: "a"})
 
 
-def test_a_tagged_string_cannot_be_an_object_key():
-    # A key has nowhere to carry a tag, and writing the bare string would
-    # drop it silently.
-    with pytest.raises(sop.SopError, match="an object key cannot hold"):
+def test_a_str_subclass_cannot_be_an_object_key():
+    # A subclass of `str` has no sop spelling as a value, so it does not get
+    # one as a key either -- and a key is the one position the shape layer
+    # never sees, so the core has to refuse it itself.
+    class Iban(str):
+        pass
+
+    with pytest.raises(sop.SopError, match="no sop spelling"):
         sop.dumps({Iban("DE89"): 1})
 
 
@@ -538,13 +538,13 @@ def test_plain_values_take_the_fast_path():
 
 
 def test_a_typed_object_is_converted():
-    assert sop.dumps(Point(1)) == "{x:1}"
+    assert sop.dumps(Point(1)) == "Point {x:1}"
 
 
 def test_a_mixed_graph_converts_in_place():
     # The traversal happens once; the convert hook spells each unknown object
     # where it is met, and the plain values around it never touch Python.
-    assert sop.dumps({"a": 1, "b": Point(2), "c": [3]}) == "{a:1,b:{x:2},c:[3]}"
+    assert sop.dumps({"a": 1, "b": Point(2), "c": [3]}) == "{a:1,b:Point {x:2},c:[3]}"
 
 
 def test_a_tag_cannot_wrap_a_value_that_spells_as_a_symbol():
@@ -555,14 +555,6 @@ def test_a_tag_cannot_wrap_a_value_that_spells_as_a_symbol():
 
     with pytest.raises(sop.SopError, match="bare symbol"):
         sop.dumps(sop.Tagged("t", Status.Up))
-
-
-def test_a_tagged_subclass_of_a_builtin_keeps_its_tag():
-    # `Iban` is a `str`, so a writer matching builtins loosely would drop the
-    # tag and emit a bare string.
-    assert sop.dumps(Iban("DE89")) == 'Iban "DE89"'
-    assert sop.dumps({"iban": Iban("DE89")}) == '{iban:Iban "DE89"}'
-    assert sop.dumps([Iban("DE89")]) == '[Iban "DE89"]'
 
 
 def test_a_subclass_is_carried_as_what_it_is():
@@ -578,8 +570,9 @@ def test_a_subclass_is_carried_as_what_it_is():
     assert sop.dumps(Roles([1, 2])) == "Roles [1,2]"
     assert sop.dumps(Pair((1, 2))) == "Pair [1,2]"
     assert sop.dumps(Ordered(a=1)) == "{a:1}"
-    # A declared tag still wins: it is a tagged string, spelled with `str`.
-    assert sop.dumps(Iban("DE89")) == 'Iban "DE89"'
+    # A privileged class still wins: it is a tagged string, whatever it
+    # subclasses.
+    assert sop.dumps({"paid": Decimal("19.99")}) == '{paid:Decimal "19.99"}'
 
 
 def test_a_runaway_value_is_an_error_not_a_crash():
@@ -618,7 +611,6 @@ def test_a_lone_surrogate_has_no_spelling():
         ("true", "the symbol `true`"),
         ("false", "the symbol `false`"),
         ("Active", "the symbol `Active`"),
-        ('Uuid "x"', "a value tagged `Uuid`"),
         ('"x"', "a string"),
         ("1", "a number"),
         ("[]", "an array"),
@@ -629,9 +621,16 @@ def test_errors_name_what_was_actually_there(text, description):
         sop.loads[Point](text)
 
 
+def test_a_tagged_value_is_named_where_something_else_was_expected():
+    # Not through a dataclass shape: that compares tags and says so, where
+    # this is the arm that describes a tagged value as what was found.
+    with pytest.raises(sop.ShapeError, match=re.escape("a value tagged `Uuid`")):
+        sop.loads[int]('Uuid "x"')
+
+
 def test_an_object_of_the_wrong_shape_reports_the_missing_key():
     with pytest.raises(sop.ShapeError, match="missing key"):
-        sop.loads[Point]("{}")
+        sop.loads[Point]("Point {}")
 
 
 def test_an_unknown_python_object_is_described_by_its_type():
@@ -641,22 +640,25 @@ def test_an_unknown_python_object_is_described_by_its_type():
 
 def test_a_tag_wrapping_a_typed_object_is_encoded_through():
     # The payload of a Tagged is not assumed to be a plain value already.
-    assert sop.dumps(sop.Tagged("wrapper", Point(1))) == "wrapper {x:1}"
+    assert sop.dumps(sop.Tagged("wrapper", Point(1))) == "wrapper Point {x:1}"
 
 
 def test_a_symbol_inside_a_typed_graph_is_encoded():
     # Symbols only reach the shape layer when something else in the graph sent
     # the whole value down the fallback path.
-    assert sop.dumps({"a": Point(1), "b": sop.Symbol("x")}) == "{a:{x:1},b:x}"
+    assert sop.dumps({"a": Point(1), "b": sop.Symbol("x")}) == "{a:Point {x:1},b:x}"
 
 
-def test_a_class_that_opts_out_of_a_tag_is_not_a_scalar():
-    # `__sop_tag__ = None` on a non-dataclass leaves nothing to carry it as.
+def test_a_class_outside_the_privileged_set_is_not_carried():
+    # There is no dunder, no registry and no decorator: a class the SDK does
+    # not already know is refused, in both directions.
     class Opaque:
-        __sop_tag__ = None
+        pass
 
     with pytest.raises(sop.ShapeError, match="unsupported shape"):
         sop.loads[Opaque]('"x"')
+    with pytest.raises(sop.ShapeError, match="cannot encode Opaque"):
+        sop.dumps(Opaque())
 
 
 # ---------------------------------------------------------------------------

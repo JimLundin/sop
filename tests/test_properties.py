@@ -9,6 +9,7 @@ that a uniform generator reaches only by luck.
 import enum
 import math
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, TypeForm
 
 import pytest
@@ -157,7 +158,6 @@ class Colour(enum.Enum):
 
 @dataclass
 class Point:
-    __sop_tag__ = None
     x: int
     y: float
 
@@ -165,10 +165,6 @@ class Point:
 @dataclass
 class Named:
     label: str  # tagged with its own name
-
-
-class Iban(str):
-    __sop_tag__ = "iban"
 
 
 @pytest.mark.parametrize(
@@ -191,7 +187,7 @@ class Iban(str):
         ),
         (int | None, st.none() | integers),
         (Colour, st.sampled_from(Colour)),
-        (Iban, st.builds(Iban, st.text(max_size=8))),
+        (Decimal, st.builds(Decimal, st.integers(min_value=-999, max_value=999))),
         (Point, st.builds(Point, integers, floats)),
         (Named, st.builds(Named, st.text(max_size=8))),
         (

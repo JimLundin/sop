@@ -6,7 +6,7 @@ Run with `pytest` from the repository root, against an installed build
 
 import enum
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
@@ -24,35 +24,9 @@ class Colour(enum.Enum):
     Blue = "azul"  # value and name differ, so both lookups get exercised
 
 
-class Iban(str):
-    __sop_tag__ = "Iban"
-
-
-class Money(Decimal):
-    __sop_tag__ = "Decimal"
-
-
-class Id(UUID):
-    __sop_tag__ = "Uuid"
-
-
-class Instant(datetime):
-    __sop_tag__ = "Instant"
-
-    @classmethod
-    def __sop_parse__(cls, text: str) -> Instant:
-        return cls.fromisoformat(text)
-
-
 @dataclass
 class Plain:
     x: int  # tagged with its own name
-
-
-@dataclass
-class Bare:
-    __sop_tag__ = None  # carried as a bare object
-    x: int
 
 
 @dataclass
@@ -62,14 +36,8 @@ class Geo:  # the convention is the default: carried as `Geo`
 
 
 @dataclass
-class Renamed:
-    __sop_tag__ = "Other"  # a tag that is not the class's own name
-    x: int
-
-
-@dataclass
 class Deposit:
-    amount: Money
+    amount: Decimal
 
 
 @dataclass
@@ -195,14 +163,9 @@ def test_set_output_does_not_depend_on_how_the_elements_repr():
     # the object's address, so the same set writes in a different order in
     # the next process.  This `__repr__` stands in for that -- it disagrees
     # with the spelling in a way an address does by accident.
+    @dataclass(frozen=True, repr=False)
     class Thing:
-        __sop_tag__ = "Thing"
-
-        def __init__(self, n: int) -> None:
-            self.n = n
-
-        def __str__(self) -> str:
-            return str(self.n)
+        n: int
 
         def __repr__(self) -> str:
             # Sorts opposite to the spelling, as an address does whenever the
@@ -210,7 +173,7 @@ def test_set_output_does_not_depend_on_how_the_elements_repr():
             return "cba"[self.n - 1]
 
     assert sop.dumps({Thing(2), Thing(1), Thing(3)}) == (
-        'Set [Thing "1",Thing "2",Thing "3"]'
+        "Set [Thing {n:1},Thing {n:2},Thing {n:3}]"
     )
 
 
@@ -243,11 +206,10 @@ def test_nested_sets():
 def test_set_inside_a_dataclass():
     @dataclass
     class Holder:
-        __sop_tag__ = None
         roles: set[str]
 
-    assert sop.loads[Holder]('{roles: Set ["admin"]}') == Holder({"admin"})
-    assert sop.dumps(Holder({"admin"})) == '{roles:Set ["admin"]}'
+    assert sop.loads[Holder]('Holder {roles: Set ["admin"]}') == Holder({"admin"})
+    assert sop.dumps(Holder({"admin"})) == 'Holder {roles:Set ["admin"]}'
 
 
 def test_a_sequence_carries_the_tag_of_what_it_was():
@@ -382,14 +344,10 @@ def test_a_class_is_tagged_with_its_own_name():
     assert sop.dumps(Plain(1)) == "Plain {x:1}"
 
 
-def test_none_opts_out_of_the_tag():
-    assert sop.loads[Bare]("{ x: 1 }") == Bare(1)
-    assert sop.dumps(Bare(1)) == "{x:1}"
-
-
-def test_an_explicit_tag_overrides_the_name():
-    assert sop.loads[Renamed]("Other { x: 1 }") == Renamed(1)
-    assert sop.dumps(Renamed(1)) == "Other {x:1}"
+def test_a_dataclass_is_always_tagged():
+    # There is no way to ask for a bare object or for a different name: the
+    # class's own name is the tag, and that is the whole rule.
+    assert sop.dumps(Geo(1.0, 2.0)) == "Geo {lat:1.0,lng:2.0}"
 
 
 def test_a_tagged_class_rejects_a_bare_object():
@@ -402,9 +360,9 @@ def test_a_tagged_class_rejects_the_wrong_tag():
         sop.loads[Plain]("Other { x: 1 }")
 
 
-def test_an_untagged_class_rejects_a_tagged_object():
+def test_a_tag_over_something_that_is_not_an_object_is_rejected():
     with pytest.raises(sop.ShapeError, match="expected an object"):
-        sop.loads[Bare]("Bare { x: 1 }")
+        sop.loads[Plain]("Plain 1")
 
 
 def test_builtins_do_not_get_a_default_tag():
@@ -417,51 +375,84 @@ def test_builtins_do_not_get_a_default_tag():
 
 
 # ---------------------------------------------------------------------------
-# Tagged scalars
+# The privileged classes, carried as tagged strings
 # ---------------------------------------------------------------------------
 
 
-def test_tagged_scalar_is_built_from_its_text():
-    assert sop.loads[Iban]('Iban "DE89"') == "DE89"
-    assert isinstance(sop.loads[Iban]('Iban "DE89"'), Iban)
-
-
-def test_tagged_scalar_is_spelled_with_str():
-    assert sop.dumps(Iban("DE89")) == 'Iban "DE89"'
-    assert sop.dumps(Money("19.99")) == 'Decimal "19.99"'
-
-
-def test_sop_parse_hook():
-    value = sop.loads[Instant]('Instant "2026-08-05T14:23:11"')
-    assert value.year == 2026 and isinstance(value, Instant)
-
-
 @pytest.mark.parametrize(
-    "shape, value",
+    "value, text",
     [
-        (Iban, Iban("DE89")),
-        (Money, Money("19.99")),
-        (Id, Id(int=7)),
-        (Instant, Instant(2026, 8, 5, 14, 23, 11)),
+        (Decimal("19.99"), 'Decimal "19.99"'),
+        (UUID(int=7), 'UUID "00000000-0000-0000-0000-000000000007"'),
+        (datetime(2026, 8, 5, 14, 23, 11), 'datetime "2026-08-05T14:23:11"'),
+        (date(2026, 8, 5), 'date "2026-08-05"'),
+        (time(14, 23, 11), 'time "14:23:11"'),
     ],
 )
-def test_tagged_scalar_roundtrip(shape, value):
-    assert roundtrip(shape, value) == value
+def test_a_privileged_class_is_carried_under_its_own_tag(value, text):
+    assert sop.dumps(value) == text
+    assert roundtrip(type(value), value) == value
 
 
-def test_tagged_scalar_rejects_the_wrong_tag():
-    with pytest.raises(sop.ShapeError, match="tagged `Iban`"):
-        sop.loads[Iban]('Swift "DE89"')
+def test_a_datetime_is_not_carried_as_the_date_it_subclasses():
+    # `datetime` is a subclass of `date`, so the two are told apart by which
+    # comes first along the MRO and not by an `isinstance` test.
+    assert sop.dumps(datetime(2026, 8, 5)) == 'datetime "2026-08-05T00:00:00"'
 
 
-def test_tagged_scalar_rejects_a_non_string_payload():
+def test_a_privileged_class_is_written_canonically():
+    # `str(datetime(...))` spells a space where ISO 8601 has a `T`, so the
+    # table spells with `isoformat` rather than leaning on `str`.
+    written = sop.dumps(datetime(2026, 8, 5, 14, 23, 11))
+    assert written == 'datetime "2026-08-05T14:23:11"'
+
+
+def test_a_subclass_of_a_privileged_class_is_not_carried():
+    # Matched exactly.  Subtypes are a later thing; for now a subclass is
+    # refused like any other class the SDK does not know.
+    class Money(Decimal):
+        pass
+
+    with pytest.raises(sop.ShapeError, match="cannot encode Money"):
+        sop.dumps(Money("19.99"))
+    with pytest.raises(sop.ShapeError, match="unsupported shape"):
+        sop.loads[Money]('Money "19.99"')
+
+
+def test_a_carrier_rejects_the_wrong_tag():
+    with pytest.raises(sop.ShapeError, match="expected tag `Decimal`, found `Swift`"):
+        sop.loads[Decimal]('Swift "DE89"')
+
+
+def test_a_carrier_rejects_an_untagged_value():
+    with pytest.raises(sop.ShapeError, match="expected a value tagged `Decimal`"):
+        sop.loads[Decimal]('"19.99"')
+
+
+def test_a_tag_mismatch_reads_the_same_for_either_carried_kind():
+    # Being untagged and being tagged wrong are one distinction, drawn in one
+    # place -- so a dataclass and a privileged class do not describe the same
+    # mistake two different ways.
+    for shape in (Plain, Decimal):
+        with pytest.raises(sop.ShapeError, match="expected tag `"):
+            sop.loads[shape]('Other "x"')
+        with pytest.raises(sop.ShapeError, match="expected a value tagged `"):
+            sop.loads[shape]("1")
+
+
+def test_a_carrier_rejects_a_non_string_payload():
     with pytest.raises(sop.ShapeError, match="carries a string"):
-        sop.loads[Iban]("Iban 1")
+        sop.loads[Decimal]("Decimal 1")
 
 
-def test_tagged_scalar_reports_a_bad_value():
+def test_a_carrier_reports_a_bad_value():
     with pytest.raises(sop.ShapeError, match="is not valid"):
-        sop.loads[Money]('Decimal "not a number"')
+        sop.loads[Decimal]('Decimal "not a number"')
+
+
+def test_a_carrier_reports_a_bad_value_from_isoformat():
+    with pytest.raises(sop.ShapeError, match="is not valid"):
+        sop.loads[datetime]('datetime "not a date"')
 
 
 def test_a_tagged_shape_reads_its_payload():
@@ -493,10 +484,11 @@ def test_unknown_tags_survive_as_Tagged():
     assert sop.dumps(value) == 'Duration "PT15M"'
 
 
-def test_a_class_without_a_declared_tag_is_not_a_scalar():
-    # A dataclass declares its fields, so its name can carry it as an object;
-    # an arbitrary class declares nothing, so without an explicit
-    # `__sop_tag__` it is not carried at all -- rather than being spelled
+def test_a_class_the_sdk_does_not_know_is_not_carried():
+    # A dataclass declares its fields, so its name can carry it as an object,
+    # and the privileged classes are carried because the table says how.  An
+    # arbitrary class is neither, and there is no way for it to opt in -- so
+    # it is refused in both directions rather than being spelled
     # `Anon "<object at 0x…>"` through `str`.
     class Anon:
         pass
@@ -505,6 +497,17 @@ def test_a_class_without_a_declared_tag_is_not_a_scalar():
         sop.dumps(Anon())
     with pytest.raises(sop.ShapeError, match="unsupported shape"):
         sop.loads[Anon]('"x"')
+
+
+def test_a_str_subclass_is_not_carried_either():
+    # There is no user opt-in, so a `str` subclass is not a tagged string; it
+    # is refused, rather than quietly losing the distinction by spelling as
+    # the `str` it subclasses.
+    class Iban(str):
+        pass
+
+    with pytest.raises(sop.ShapeError, match="cannot encode Iban"):
+        sop.dumps(Iban("DE89"))
 
 
 # ---------------------------------------------------------------------------
@@ -569,19 +572,32 @@ def test_a_union_member_that_is_not_a_class_names_no_tag():
 
 def test_a_shared_tag_in_a_union_is_an_error():
     # A shared discriminant is a schema bug; silently degrading to trying
-    # members in order would hide it until the members diverged.
-    @dataclass
-    class One:
-        __sop_tag__ = "Dup"
-        x: int
+    # members in order would hide it until the members diverged.  Two
+    # dataclasses share a tag exactly when they share a name, which is what
+    # these two scopes arrange.
+    def one() -> type:
+        @dataclass
+        class Dup:
+            x: int
 
-    @dataclass
-    class Two:
-        __sop_tag__ = "Dup"
-        y: int
+        return Dup
+
+    def two() -> type:
+        @dataclass
+        class Dup:
+            y: int
+
+        return Dup
 
     with pytest.raises(sop.ShapeError, match="share the tag `Dup`"):
-        sop.loads[One | Two]("dup {x: 1}")
+        sop.loads[one() | two()]("Dup {x: 1}")
+
+
+def test_a_union_keys_a_privileged_class_on_its_own_name():
+    assert sop.loads[Decimal | Plain]('Decimal "19.99"') == Decimal("19.99")
+    assert sop.loads[Decimal | Plain]("Plain { x: 1 }") == Plain(1)
+    with pytest.raises(sop.ShapeError, match="expected one of `Decimal`, `Plain`"):
+        sop.loads[Decimal | Plain]("Nope { x: 1 }")
 
 
 def test_a_non_string_enum_matches_by_name():
@@ -637,7 +653,6 @@ def test_kind_matched_members_do_not_discriminate():
 
 @dataclass
 class Fields:
-    __sop_tag__ = None
     from_: str = field(metadata={"sop": "from"})  # metadata names the wire key
     cls_: str = field(default="c", metadata={"sop": "class"})
     n: int = 3  # default
@@ -645,8 +660,8 @@ class Fields:
 
 
 def test_metadata_names_the_wire_key():
-    assert sop.loads[Fields]('{from: "x"}').from_ == "x"
-    assert sop.loads[Fields]('{from: "x", class: "y"}').cls_ == "y"
+    assert sop.loads[Fields]('Fields {from: "x"}').from_ == "x"
+    assert sop.loads[Fields]('Fields {from: "x", class: "y"}').cls_ == "y"
 
 
 def test_a_field_name_is_otherwise_verbatim():
@@ -654,28 +669,27 @@ def test_a_field_name_is_otherwise_verbatim():
     # wire key, underscore and all.
     @dataclass
     class Verbatim:
-        __sop_tag__ = None
         key_: str
 
-    assert sop.loads[Verbatim]('{key_: "x"}').key_ == "x"
-    assert sop.dumps(Verbatim("x")) == '{key_:"x"}'
+    assert sop.loads[Verbatim]('Verbatim {key_: "x"}').key_ == "x"
+    assert sop.dumps(Verbatim("x")) == 'Verbatim {key_:"x"}'
 
 
 def test_defaults_are_used_when_a_key_is_absent():
-    assert sop.loads[Fields]('{from: "x"}').n == 3
+    assert sop.loads[Fields]('Fields {from: "x"}').n == 3
 
 
 def test_missing_required_key():
     with pytest.raises(sop.ShapeError, match="missing key `from`"):
-        sop.loads[Fields]("{}")
+        sop.loads[Fields]("Fields {}")
 
 
 def test_unknown_keys_are_ignored():
-    assert sop.loads[Fields]('{from: "x", surplus: 1}').from_ == "x"
+    assert sop.loads[Fields]('Fields {from: "x", surplus: 1}').from_ == "x"
 
 
 def test_init_false_fields_are_not_read():
-    assert sop.loads[Fields]('{from: "x", computed: 9}').computed == 0
+    assert sop.loads[Fields]('Fields {from: "x", computed: 9}').computed == 0
 
 
 def test_a_validating_dataclass_reports_a_shape_error():
@@ -683,7 +697,6 @@ def test_a_validating_dataclass_reports_a_shape_error():
     # shape, and it surfaces with a path like every other mismatch.
     @dataclass
     class Positive:
-        __sop_tag__ = None
         n: int
 
         def __post_init__(self) -> None:
@@ -691,12 +704,12 @@ def test_a_validating_dataclass_reports_a_shape_error():
                 raise ValueError("n must be positive")
 
     with pytest.raises(sop.ShapeError, match="not a valid Positive") as caught:
-        sop.loads[list[Positive]]("[{n: -1}]")
+        sop.loads[list[Positive]]("[Positive {n: -1}]")
     assert str(caught.value).startswith("$[0]: ")
 
 
 def test_field_names_are_written_with_their_alias():
-    assert sop.dumps(Fields("x")) == '{from:"x",class:"c",n:3,computed:0}'
+    assert sop.dumps(Fields("x")) == 'Fields {from:"x",class:"c",n:3,computed:0}'
 
 
 # ---------------------------------------------------------------------------
@@ -732,20 +745,19 @@ class Status(enum.Enum):
 
 @dataclass
 class Account:
-    __sop_tag__ = None
-    id: Id
-    created_at: Instant
-    balance: Money
+    id: UUID
+    created_at: datetime
+    balance: Decimal
     location: Geo
     roles: set[str]
     status: Status
-    deleted_at: Instant | None
+    deleted_at: datetime | None
     session_ttl: sop.Tagged | None = None
 
 
-TYPED_RESPONSE = """{
-  id: Uuid "9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234",
-  created_at: Instant "2026-08-05T14:23:11Z",
+TYPED_RESPONSE = """Account {
+  id: UUID "9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234",
+  created_at: datetime "2026-08-05T14:23:11Z",
   balance: Decimal "19.99",
   session_ttl: Duration "PT15M",
   location: Geo { lat: 47.6062, lng: -122.3321 },
@@ -757,8 +769,8 @@ TYPED_RESPONSE = """{
 
 def test_a_typed_api_response():
     account = sop.loads[Account](TYPED_RESPONSE)
-    assert account.id == Id("9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234")
-    assert account.balance == Money("19.99")
+    assert account.id == UUID("9f1c2e7a-3b44-4f80-9c1d-2a5e7b0f1234")
+    assert account.balance == Decimal("19.99")
     assert account.location.lat == 47.6062
     assert account.roles == {"admin", "beta"}
     assert account.status is Status.Active

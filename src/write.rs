@@ -38,9 +38,11 @@ enum Classified<'py> {
 
 /// Classify a Python object as a sop value.
 ///
-/// Every case is matched on the *exact* type. A subclass may carry a tag —
-/// `class Iban(str)` is written `Iban "DE89"` — and treating it as a plain
-/// string here would drop the tag silently. `Symbol` and `Tagged` are final,
+/// Every case is matched on the *exact* type. A subclass is the SDK's to
+/// spell, not this function's — `class Roles(list)` is written `Roles [ … ]`,
+/// and `class Iban(str)` has no spelling at all and is refused — so treating
+/// either as the builtin it subclasses would answer for the SDK and answer
+/// wrongly. `Symbol` and `Tagged` are final,
 /// so exact is the whole question for them too, and asking it that way costs
 /// a pointer compare where `isinstance` walks the bases of every value that
 /// is not one. `None` is a type the writer does not know, which the SDK's
@@ -328,9 +330,10 @@ impl<'a, 'py> Writer<'a, 'py> {
     }
 
     /// An object key's spelling, which the caller writes and then extends
-    /// the path with. Exact `str` only: under the protocol a str subclass
-    /// carries a tag, and a key has nowhere to put one, so accepting it here
-    /// would drop the tag silently.
+    /// the path with. Exact `str` only: a subclass of `str` has no sop
+    /// spelling as a value, so accepting one as a key would write, in the
+    /// one position the SDK never sees, what the SDK refuses everywhere
+    /// else.
     fn key_text<'k>(&self, key: &'k Bound<'_, PyAny>) -> Result<Cow<'k, str>, Error> {
         match key.cast_exact::<PyString>() {
             Ok(key) => match key.to_cow() {
@@ -338,7 +341,7 @@ impl<'a, 'py> Writer<'a, 'py> {
                 Err(_) => self.err("object key contains a lone surrogate".to_string()),
             },
             Err(_) if key.is_instance_of::<PyString>() => self.err(
-                "a subclass of str carries a tag, which an object key cannot hold".to_string(),
+                "an object key must be an exact str; a subclass has no sop spelling".to_string(),
             ),
             Err(_) => self.err("object keys must be strings".to_string()),
         }
