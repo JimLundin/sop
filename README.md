@@ -222,6 +222,7 @@ with no union in it — or read untyped.
 Cargo.toml           one crate, whose cdylib is the extension module
 pyproject.toml       the Python package, built by maturin
 .cargo/config.toml   defaults PYO3_PYTHON to python3.15
+.github/workflows/   CI: every check under "Running things", on one runner
 
 src/lib.rs           the module: Symbol, Tagged, the errors, loads, dumps
 src/parse.rs         reading text into Python objects, one pass
@@ -248,11 +249,23 @@ uv venv --python 3.15 && . .venv/bin/activate  # needs Rust and Python 3.15
 uv pip install --group dev                     # the toolchain below
 maturin develop --release                      # build into the active venv
 uv pip install .                               # or: the wheel, via maturin build
+
+cargo fmt --check                              # the crate's own two gates,
+cargo clippy --all-targets -- -D warnings      # pedantic, and warnings are errors
 pytest                                         # tests + branch coverage, 100% enforced
 ruff check --fix . && ruff format .            # lint and format
 mypy                                           # strict; the gate, configured in pyproject.toml
+stubtest sop._core --ignore-missing-stub       # the hand-written stubs against the module
 pyright                                        # strict too, but advisory (see below)
 ```
+
+Every one of those is a gate in CI (`.github/workflows/ci.yml`), pyright
+excepted. The Rust checks run before the release build, so a formatting slip
+is reported without waiting on a compile.
+
+`stubtest` is there because `python/sop/_core.pyi` is written by hand and
+nothing else compares it to the module it describes -- a stub that claims
+less than the runtime enforces is a check that passes on code which crashes.
 
 mypy is the gate. pyright is configured and worth running, but it is
 advisory for now: its PEP 747 `TypeForm` support does not yet accept a union

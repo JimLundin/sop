@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # The extension is built against the interpreter it runs on, not the
+      # limited API, so the interpreter comes first and everything else --
+      # cargo included, via PYO3_PYTHON in .cargo/config.toml -- resolves
+      # `python3.15` out of this venv.
+      - name: Set up Python 3.15
+        run: |
+          uv python install 3.15
+          uv venv --python 3.15
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install the toolchain
+        run: uv pip install --group dev
+
+      # -- Rust ------------------------------------------------------------
+      # Before the build: these are the cheap checks, and a failure here is
+      # worth reporting without waiting for a release compile.
+      - name: cargo fmt
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # -- Python ----------------------------------------------------------
+      - name: Build the extension
+        run: maturin develop --release
+
+      - name: ruff
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: mypy
+        run: mypy
+
+      # The stubs are written by hand, so this is the only thing that checks
+      # them against the module they describe.
+      - name: stubtest
+        run: stubtest sop._core --ignore-missing-stub
+
+      - name: pytest
+        run: pytest
+
+      # Advisory, as the README says: pyright's PEP 747 support does not yet
+      # accept a union as a `TypeForm`, so the shape layer reads as errors to
+      # it. Run and reported, but not a gate.
+      - name: pyright (advisory)
+        continue-on-error: true
+        run: pyright

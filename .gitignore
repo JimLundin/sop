@@ -3,6 +3,7 @@ __pycache__/
 .hypothesis/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 .coverage
 .venv/
 python/sop/*.so
