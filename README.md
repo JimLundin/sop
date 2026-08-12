@@ -192,7 +192,7 @@ meant to be paid back: user classes and subtypes are things to add later.
 | a privileged class | `Name "…"` — the five above, matched exactly |
 | `str` | a string, never a symbol |
 | `int` | a number spelled with digits alone |
-| `float` | a number, read as a float however it was spelled |
+| `float` | a number spelled with a point or an exponent |
 | `bool` | the symbol `true` or the symbol `false` |
 | `None` | the symbol `null` |
 | `sop.Symbol` | a symbol, as itself |
@@ -227,20 +227,31 @@ sop.loads[int | float]("1.5")  # 1.5, a float
 ```
 
 Number kind is spelling-determined everywhere, unions included, so `int |
-float` and `float | int` are the same shape and read the same way. A shape
-that *names* a value beats one that merely admits it: `float` reads an
-integer-spelled number, but only where no `int` member is there to take it
-first. The wildcards work the same way — `Symbol` takes any symbol and
-`Tagged` any tag, so an enum or a dataclass that names one wins over them.
+float` and `float | int` are the same shape and read the same way. `float`
+reads a float-spelled number and nothing else: `1` is an integer by the
+format's own rule, and reading it as a float would be the one place the format
+guessed.
 
-Two members that cannot be told apart are a schema error, raised when the
-shape is first read rather than on whichever document happens to reach the
-collision:
+There is no precedence and no order to learn. A shape either names what it
+reads — a tag, a symbol's spelling — or takes a whole kind: `Symbol` reads
+every symbol, `Tagged` every tagged value, `Any` everything. Those are claims
+of the same rank, because the document says only what it *is*, never which
+alternative was meant. So two members whose claims meet are a schema error,
+raised when the shape is first read rather than on whichever document happens
+to reach the collision:
 
 ```
 $: union members Deposit and Deposit cannot be told apart: both read a value tagged `Deposit`
 $: union members list[int] and tuple[int, ...] cannot be told apart: both read an array
+$: union members Plain and Tagged cannot be told apart: both read a value tagged `Plain`
 ```
+
+That last one is the rule doing its job rather than being awkward: `Plain |
+sop.Tagged` has no answer a document could give. `Any` is excluded from every
+union by the same rule and needs no clause of its own, since it reads every
+kind — it stays exactly as usable as before on its own, nested, or as a
+payload. What a catch-all *can* still join is a union it does not meet:
+`sop.Tagged | None` and `sop.Symbol | int` are both fine.
 
 That is the whole rule, and it is why there is no order to learn: if a union
 is ambiguous the format says so, and if it is not, the document decides.

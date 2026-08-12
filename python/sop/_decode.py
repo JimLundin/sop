@@ -94,8 +94,6 @@ def describe(value: Value) -> str:
             return f"a value tagged `{value.tag}`"
         case True | False:
             return f"the symbol `{'true' if value else 'false'}`"
-        case int() | float():
-            return "a number"
         case _:
             return str(kind_of(value))
 
@@ -172,9 +170,11 @@ def build(shape: Shape, memo: _Memo | None = None) -> Decoder:
         case Float():
 
             def number(value: Value, path: str) -> float:
-                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                # A float-spelled number only.  `1` is an integer by the
+                # format's own rule, and reading it here would be a guess.
+                if not isinstance(value, float):
                     raise _wrong(shape, value, path)
-                return float(value)
+                return value
 
             return number
 
@@ -392,23 +392,22 @@ def _build_union(shape: Shape, members: tuple[Shape, ...], memo: _Memo) -> Decod
 
     The document's own discriminant chooses, so the order the members were
     written in does not come into it.  `_analyse` has already refused a union
-    whose members claim the same slot, so filling these tables cannot
-    collide."""
-    exact: dict[Slot, Decoder] = {}
-    wider: dict[Kind, Decoder] = {}
+    whose members' claims meet, so filling this table cannot collide."""
+    table: dict[Slot, Decoder] = {}
     for member in members:
         decoder = build(member, memo)
-        member_exact, member_wider = claims(member)
-        for slot in member_exact:
-            exact[slot] = decoder
-        for kind in member_wider:
-            # A wildcard is not a claim, so the first member offering one
-            # keeps it; they are distinguishable only by what they read.
-            wider.setdefault(kind, decoder)
+        for slot in claims(member):
+            table[slot] = decoder
 
     def union(value: Value, path: str) -> Any:
+        # The slot the document fills, then the kind it belongs to.  At most
+        # one of the two is claimed -- a member claiming the kind and one
+        # claiming a slot within it is the collision `_analyse` refuses -- so
+        # there is nothing to choose between.
         kind = kind_of(value)
-        chosen = exact.get(_slot_of(value, kind)) or wider.get(kind)
+        chosen = table.get(_slot_of(value, kind))
+        if chosen is None:
+            chosen = table.get(kind)
         if chosen is None:
             raise _wrong(shape, value, path)
         return chosen(value, path)

@@ -14,6 +14,7 @@ out.
 import builtins
 import dataclasses
 import enum
+import itertools
 import types
 import typing
 from typing import Any, TypeForm, TypeIs, get_args, get_origin
@@ -40,6 +41,7 @@ from ._ir import (
     UnionOf,
     Value,
     claims,
+    meeting,
 )
 from ._ir import Bool as BoolShape
 
@@ -238,16 +240,16 @@ def _union(members: tuple[TypeForm[Any], ...], path: str, aliases: _Aliases) -> 
                 path, f"alias `{inner.name}` is one of its own union members"
             )
 
-    taken: dict[Slot, TypeForm[Any]] = {}
-    for member, inner in pairs:
-        for slot in claims(inner)[0]:
-            if (already := taken.get(slot)) is not None:
-                raise ShapeError(
-                    path,
-                    f"union members {_name_of(already)} and {_name_of(member)} "
-                    f"cannot be told apart: both read {_spell(slot)}",
-                )
-            taken[slot] = member
+    # Each member's claims worked out once, not again for every other member
+    # it is held against.
+    claimed = [(member, claims(inner)) for member, inner in pairs]
+    for (one_form, one), (other_form, other) in itertools.combinations(claimed, 2):
+        if (slot := meeting(one, other)) is not None:
+            raise ShapeError(
+                path,
+                f"union members {_name_of(one_form)} and {_name_of(other_form)} "
+                f"cannot be told apart: both read {_spell(slot)}",
+            )
 
     return UnionOf(tuple(inner for _, inner in pairs))
 

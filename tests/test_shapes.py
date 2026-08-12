@@ -73,7 +73,6 @@ def roundtrip[T](shape: TypeForm[T], value: object) -> T:
         (int, "1", 1),
         (int, "-0", 0),
         (float, "1.5", 1.5),
-        (float, "2", 2.0),  # an integer literal is still a number
         (bool, "true", True),
         (bool, "false", False),
         (type(None), "null", None),
@@ -95,7 +94,7 @@ def test_scalar_shapes(shape: TypeForm[Any], text: str, expected: object) -> Non
         (int, '"1"', "expected an integer"),
         (bool, "1", "expected `true` or `false`"),
         (bool, "Active", "expected `true` or `false`"),
-        (float, "true", "expected a number"),
+        (float, "true", "expected a float"),
         (type(None), "1", "expected `null`"),
         (sop.Symbol, '"x"', "expected a symbol"),
         (sop.Tagged, "1", "expected a tagged value"),
@@ -658,13 +657,26 @@ def test_an_exotic_alias_is_not_a_shape() -> None:
         sop.loads[Annotated[int, []]]("1")
 
 
-def test_kind_matched_members_do_not_discriminate() -> None:
-    # Enums are carried as symbols, and `Tagged` and `Any` match on kind, so
-    # none of them is a wire tag the union can key on.
+def test_a_kind_matched_member_still_discriminates_where_it_does_not_meet() -> None:
+    # An enum is carried as a symbol and a dataclass as a tagged value, so the
+    # two never read the same document and the union is decidable.
     assert sop.loads[Colour | Plain]("azul") is Colour.Blue
-    unmodelled = sop.loads[Plain | sop.Tagged]('Duration "PT15M"')
-    assert isinstance(unmodelled, sop.Tagged) and unmodelled.tag == "Duration"
-    assert sop.loads[Plain | Any]("7") == 7
+    assert sop.loads[Colour | Plain]("Plain { x: 1 }") == Plain(1)
+    # `Tagged` reads every tagged value, but nothing else, so `null` is still
+    # the other member's alone.
+    assert sop.loads[sop.Tagged | None]("null") is None
+    ttl = sop.loads[sop.Tagged | None]('Duration "PT15M"')
+    assert isinstance(ttl, sop.Tagged) and ttl.tag == "Duration"
+
+
+def test_a_member_that_reads_a_whole_kind_meets_one_that_names_a_value_in_it() -> None:
+    # `Tagged` reads every tagged value and `Any` reads everything, so beside
+    # a dataclass neither is a second alternative -- it is the same one worded
+    # twice, and the document cannot say which was meant.
+    meeting: list[Any] = [Plain | sop.Tagged, Plain | Any, Colour | sop.Symbol]
+    for shape in meeting:
+        with pytest.raises(sop.ShapeError, match="cannot be told apart"):
+            sop.loads[shape]("Plain { x: 1 }")
 
 
 # ---------------------------------------------------------------------------
@@ -742,7 +754,7 @@ def test_field_names_are_written_with_their_alias() -> None:
     "shape, text, path",
     [
         (dict[str, list[int]], '{a: [1, "x"]}', "$.a[1]"),
-        (list[Geo], "[Geo {lat: 1, lng: Active}]", "$[0].lng"),
+        (list[Geo], "[Geo {lat: 1.0, lng: Active}]", "$[0].lng"),
         (dict[str, dict[str, int]], "{a: {b: Active}}", "$.a.b"),
         (list[int], '["x"]', "$[0]"),
         (Fields, "{}", "$"),
@@ -892,11 +904,13 @@ def test_number_kind_decides_within_a_union_as_it_does_outside_one() -> None:
     assert isinstance(sop.loads[int | float]("-0"), int)
 
 
-def test_a_float_shape_still_widens_when_nothing_claims_the_integer() -> None:
-    # `Float` takes an integer-spelled number, but only where no `int` member
-    # is there to take it first.
-    assert sop.loads[float | str]("1") == 1.0
-    assert isinstance(sop.loads[float | str]("1"), float)
+def test_a_float_shape_reads_only_a_float_spelled_number() -> None:
+    # Number kind is spelling-determined, so a float shape reads a
+    # float-spelled number and nothing else -- `1` is an integer, and reading
+    # it here would be the one place the format guessed.
+    assert sop.loads[float | str]("1.0") == 1.0
+    with pytest.raises(sop.ShapeError, match="expected a float, found an integer"):
+        sop.loads[float]("1")
 
 
 def test_members_that_cannot_be_told_apart_are_refused_when_the_shape_is_read() -> None:
@@ -931,13 +945,18 @@ def test_enums_with_disjoint_spellings_discriminate_on_them() -> None:
     assert sop.loads[Season | Bearing]("verano") is Season.Summer
 
 
-def test_a_wildcard_does_not_collide_with_a_member_that_names_the_value() -> None:
-    # `Symbol` takes any symbol and `Tagged` any tag, so a shape that names
-    # one beats them rather than being ambiguous with them.
-    assert sop.loads[Bearing | sop.Symbol]("norte") is Bearing.North
-    assert sop.loads[Bearing | sop.Symbol]("otro") == sop.Symbol("otro")
-    assert sop.loads[Amount | sop.Tagged]("Amount {n: 1}") == Amount(1)
-    assert sop.loads[Amount | sop.Tagged]("Other 1") == sop.Tagged("Other", 1)
+def test_a_shape_that_reads_a_whole_kind_cannot_share_a_union_with_one_in_it() -> None:
+    # There is no precedence to apply: `Symbol` reads every symbol and
+    # `Bearing` reads two of them, so a symbol does not say which was meant.
+    with pytest.raises(sop.ShapeError, match="both read the symbol `norte`"):
+        sop.loads[Bearing | sop.Symbol]("norte")
+    with pytest.raises(sop.ShapeError, match="both read a value tagged `Amount`"):
+        sop.loads[Amount | sop.Tagged]("Amount {n: 1}")
+    # ...and which side it was written on does not come into it either.
+    with pytest.raises(sop.ShapeError, match="both read the symbol `norte`"):
+        sop.loads[sop.Symbol | Bearing]("norte")
+    with pytest.raises(sop.ShapeError, match="both read a value tagged `Amount`"):
+        sop.loads[sop.Tagged | Amount]("Amount {n: 1}")
 
 
 # ---------------------------------------------------------------------------
@@ -995,7 +1014,9 @@ def test_mutually_recursive_dataclasses_read() -> None:
 
 
 def test_a_set_shape_needs_the_tag_to_carry_an_array() -> None:
-    with pytest.raises(sop.ShapeError, match="`Set` carries an array, found a number"):
+    with pytest.raises(
+        sop.ShapeError, match="`Set` carries an array, found an integer"
+    ):
         sop.loads[set[int]]("Set 1")
 
 

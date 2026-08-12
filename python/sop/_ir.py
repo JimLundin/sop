@@ -269,51 +269,60 @@ with either side of it."""
 # ---------------------------------------------------------------------------
 
 
-def claims(shape: Shape) -> tuple[frozenset[Slot], frozenset[Kind]]:
-    """What a shape reads: the slots it claims exclusively, and the kinds it
-    will take when nothing has claimed them.
+def kind_of_slot(slot: Slot) -> Kind:
+    """The kind a slot belongs to.  A named slot belongs to the kind whose
+    values name themselves -- a tag or a symbol."""
+    match slot:
+        case ("tag", _):
+            return Kind.TAGGED
+        case ("sym", _):
+            return Kind.SYMBOL
+        case kind:
+            return kind
 
-    Two tiers, because a shape that names a value exactly should win over one
-    that merely admits it: `int | float` reads `1` as an integer and `1.0` as
-    a float, whichever order it was written in, because `Float` claims
-    `FLOAT` outright and `INT` only if no `Int` is there to take it.  The
-    wildcards are the same idea -- `Symbol` takes any symbol, `Tagged` any
-    tag, `Any` anything -- so a shape that names one beats them.
 
-    Two members claiming the same slot are a union that cannot be told apart,
-    which `_analyse` refuses.  Wildcards are not claims and do not collide;
-    the first member offering one is the one that gets it, and since the
-    wildcards are distinguishable only by what they read, that is not a
-    choice between different answers."""
+def claims(shape: Shape) -> frozenset[Slot]:
+    """The slots a document can fill to reach this shape.
+
+    A shape either names what it reads -- a tag, a symbol's spelling -- or
+    takes a whole kind: `Symbol` reads every symbol, `Tagged` every tagged
+    value, `Any` everything.  Both are claims of the same rank; a shape that
+    names one value does not outrank one that takes them all, because the
+    document says only what it is and not which alternative was meant.
+
+    So two members whose claims meet are a union that cannot be told apart,
+    and `_analyse` refuses it.  There is no precedence to apply and no order
+    to learn."""
     match shape:
         case Dynamic():
-            return frozenset(), frozenset(Kind)
+            return frozenset(Kind)
         case Null():
-            return frozenset({Kind.NULL}), frozenset()
+            return frozenset({Kind.NULL})
         case Bool():
-            return frozenset({Kind.BOOL}), frozenset()
+            return frozenset({Kind.BOOL})
         case Int():
-            return frozenset({Kind.INT}), frozenset()
+            return frozenset({Kind.INT})
         case Float():
-            # An integer-spelled number reads as a float, but only where
-            # nothing spelled `int` is on offer to take it first.
-            return frozenset({Kind.FLOAT}), frozenset({Kind.INT})
+            # Only a float-spelled number.  Number kind is spelling-determined,
+            # so `1` is an integer and reading it as a float would be the one
+            # place the format guessed.
+            return frozenset({Kind.FLOAT})
         case Str():
-            return frozenset({Kind.STR}), frozenset()
+            return frozenset({Kind.STR})
         case SymbolOf():
-            return frozenset(), frozenset({Kind.SYMBOL})
+            return frozenset({Kind.SYMBOL})
         case EnumOf(_, spellings):
-            return frozenset(("sym", s) for s in spellings), frozenset()
+            return frozenset(("sym", spelling) for spelling in spellings)
         case ArrayOf(_, _):
-            return frozenset({Kind.ARRAY}), frozenset()
+            return frozenset({Kind.ARRAY})
         case MappingOf(_, _):
-            return frozenset({Kind.OBJECT}), frozenset()
+            return frozenset({Kind.OBJECT})
         case SetOf(_, _):
-            return frozenset({("tag", "Set")}), frozenset()
+            return frozenset({("tag", "Set")})
         case CarrierOf(cls, _) | Record(cls):
-            return frozenset({("tag", cls.__name__)}), frozenset()
+            return frozenset({("tag", cls.__name__)})
         case TaggedOf(_):
-            return frozenset(), frozenset({Kind.TAGGED})
+            return frozenset({Kind.TAGGED})
         case Deferred(cell, _):  # pragma: no cover
             # Unreachable: this is asked of a union's members, and a deferred
             # shape is never one.  An alias reaches back into itself through a
@@ -321,15 +330,30 @@ def claims(shape: Shape) -> tuple[frozenset[Slot], frozenset[Kind]]:
             # its own alternatives is refused when it is analysed.
             return claims(cell[0])
         case UnionOf(members):
-            exact: set[Slot] = set()
-            wider: set[Kind] = set()
+            met: set[Slot] = set()
             for member in members:
-                member_exact, member_wider = claims(member)
-                exact |= member_exact
-                wider |= member_wider
-            return frozenset(exact), frozenset(wider)
+                met |= claims(member)
+            return frozenset(met)
         case _:  # pragma: no cover -- exhaustive; the checkers prove it
             assert_never(shape)
+
+
+def meeting(one: frozenset[Slot], other: frozenset[Slot]) -> Slot | None:
+    """A slot both shapes read, if there is one.
+
+    A kind claimed whole covers every named slot of that kind, so `Symbol`
+    beside an enum is not a second alternative but the same one worded twice.
+    That subsumption is the only thing this knows that set intersection does
+    not."""
+    for mine in one:
+        for theirs in other:
+            if mine == theirs:
+                return mine
+            if isinstance(mine, Kind) and kind_of_slot(theirs) is mine:
+                return theirs
+            if isinstance(theirs, Kind) and kind_of_slot(mine) is theirs:
+                return mine
+    return None
 
 
 def names(shape: Shape) -> str:
@@ -346,7 +370,7 @@ def names(shape: Shape) -> str:
         case Int():
             return "an integer"
         case Float():
-            return "a number"
+            return "a float"
         case Str():
             return "a string"
         case SymbolOf():

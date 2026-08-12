@@ -515,7 +515,7 @@ def test_a_float_keeps_its_kind() -> None:
     # rule holds there too and no `.0` is needed.
     assert sop.dumps(1e300) == "1e300"
     assert isinstance(sop.loads[Any](sop.dumps(1e300)), float)
-    assert sop.loads[float]("2") == 2.0  # an integer literal is still a number
+    # ...and a float shape reads only that spelling: `2` is an integer.
 
 
 def test_negative_zero_keeps_its_sign() -> None:
@@ -625,7 +625,7 @@ def test_a_lone_surrogate_has_no_spelling() -> None:
         ("false", "the symbol `false`"),
         ("Active", "the symbol `Active`"),
         ('"x"', "a string"),
-        ("1", "a number"),
+        ("1", "an integer"),
         ("[]", "an array"),
     ],
 )

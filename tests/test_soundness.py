@@ -261,6 +261,13 @@ def _at(origin: Any, *args: Any) -> TypeForm[Any]:
     return cast(TypeForm[Any], origin[args[0] if len(args) == 1 else args])
 
 
+def _optional(shape: object) -> bool:
+    """Whether `shape | None` is a shape.  One that already reads `null` --
+    `None` itself, and the two that read anything -- would be the other
+    member worded twice, which the shape language refuses."""
+    return shape is not None and shape is not Any and shape is not sop.Value
+
+
 def _extend(
     inner: st.SearchStrategy[Any], hashable: st.SearchStrategy[Any]
 ) -> st.SearchStrategy[Any]:
@@ -273,7 +280,7 @@ def _extend(
         | hashable.map(lambda s: _at(set, s))
         | hashable.map(lambda s: _at(frozenset, s))
         # `None | None` is not a union and not a shape; nothing else is barred.
-        | inner.filter(lambda s: s is not None).map(lambda s: s | None)
+        | inner.filter(_optional).map(lambda s: s | None)
         | inner.filter(_taggable).map(lambda s: _at(sop.Tagged, s))
     )
 
@@ -284,7 +291,7 @@ def _hashable_extend(inner: st.SearchStrategy[Any]) -> st.SearchStrategy[Any]:
         inner.map(lambda s: _at(tuple, s, ...))
         | inner.map(lambda s: _at(frozenset, s))
         | inner.map(lambda s: _at(frozendict, str, s))
-        | inner.filter(lambda s: s is not None).map(lambda s: s | None)
+        | inner.filter(_optional).map(lambda s: s | None)
         | inner.filter(_taggable).map(lambda s: _at(sop.Tagged, s))
     )
 
@@ -508,7 +515,6 @@ SUPPORTED: list[tuple[str, TypeForm[Any], str, object]] = [
     # label as the README spells it, shape, a document, what it reads as
     ("int", int, "3", 3),
     ("float", float, "3.5", 3.5),
-    ("float", float, "3", 3.0),  # a number, whichever way it is spelled
     ("bool", bool, "true", True),
     ("str", str, '"a"', "a"),
     ("None", None, "null", None),
