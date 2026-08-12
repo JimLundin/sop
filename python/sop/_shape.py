@@ -190,21 +190,27 @@ def _array_tag(cls: type) -> str | None:
     return _tag_of(cls)
 
 
-type Carriers[T] = dict[type[T], tuple[Callable[[T], str], Callable[[str], T]]]
+type Carriers[T] = frozendict[type[T], tuple[Callable[[T], str], Callable[[str], T]]]
 
-_CARRIERS: Carriers[Any] = {
-    Decimal: (str, Decimal),
-    UUID: (str, UUID),
-    datetime: (datetime.isoformat, datetime.fromisoformat),
-    date: (date.isoformat, date.fromisoformat),
-    time: (time.isoformat, time.fromisoformat),
-}
+_CARRIERS: Carriers[Any] = frozendict(
+    {
+        Decimal: (str, Decimal),
+        UUID: (str, UUID),
+        datetime: (datetime.isoformat, datetime.fromisoformat),
+        date: (date.isoformat, date.fromisoformat),
+        time: (time.isoformat, time.fromisoformat),
+    }
+)
 """The classes carried as tagged strings: how each is spelled and built, and
 nothing about what it is called -- a carried class is tagged with its own
 name, this one included.
 
 Matched exactly.  A subclass of one of these is not carried, and is refused
-like any other class the SDK does not know."""
+like any other class the SDK does not know.
+
+A `frozendict`, so the one table the SDK dispatches on cannot be reached
+into and changed at run time.  There is deliberately no way for a class to
+opt in, and a mutable table is exactly the way in that would be."""
 
 
 @_per_class

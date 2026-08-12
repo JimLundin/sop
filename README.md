@@ -59,8 +59,11 @@ text = sop.dumps(order)
 ```
 
 Reading takes a shape because text carries no type; writing does not, because
-the object does. There is no shapeless `loads` — `loads[Any]` is the escape
-hatch and it has to be written down.
+the object does. `loads` is one class carrying the shape it reads at, and the
+shape it carries by default is `Value` — so `loads(text)` is not a shapeless
+read, it is the read at the value domain, typed precisely. Turning checking
+*off* is a separate decision and still has to be written down: `loads[Any]`
+is the escape hatch.
 
 The two are not inverses and are not meant to be: `dumps` takes nearly any
 Python object, while untyped `loads` answers `Value` and nothing else.
@@ -180,6 +183,21 @@ refused the same way a document that does not fit is, with a `ShapeError`
 naming the shape at the path it was asked for. So is a shape whose values
 Python could not build: `set[list[int]]` is a set of lists, which a set cannot
 hold. `tests/test_soundness.py` has the enumeration.
+
+An object's keys are strings, so `dict[str, V]` is the shape that reads one;
+`dict[Any, V]` is accepted and means the same thing. A key type that is
+neither — `dict[int, V]` — is refused rather than silently coerced. That is a
+limitation of the format as it stands and not a statement about what keys
+ought to be; carrying other key types is a thing to add later, and the shape
+language is where it would be lifted.
+
+Unknown keys are ignored. A document may carry keys a dataclass does not
+declare, and they are dropped rather than refused, so a reader built against
+an older schema keeps working against a newer writer. That is the one place
+the SDK is deliberately lax: everything else it does not recognise is an
+error. A field the *reader* requires and the document lacks is still a
+`ShapeError`, so this buys forward compatibility without giving up the
+missing-key check.
 
 Number kind is spelling-determined — digits alone denote an integer, a point
 or an exponent a float — and writing preserves it, the sign of `-0.0`

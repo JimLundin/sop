@@ -398,10 +398,19 @@ def test_each_error_carries_only_the_location_it_has():
     assert not hasattr(shaped.value, "line")
 
 
-def test_loads_needs_a_shape():
-    # `loads[Any]` is the escape hatch and it has to be written down.
-    with pytest.raises(TypeError):
-        sop.loads("1")  # type: ignore[operator]
+def test_loads_is_the_read_at_value():
+    # `loads` carries a shape like every other `loads[S]`; the shape it
+    # carries is `Value`.  So an unsubscripted read is not a shapeless one --
+    # it is typed as the domain the parser produces, and answers exactly what
+    # `loads[Value]` does.
+    text = '{a: [1, "x", Active], b: null}'
+    assert sop.loads(text) == sop.loads[sop.Value](text)
+
+
+def test_turning_checking_off_still_has_to_be_written_down():
+    # `Value` is a precise type and `Any` is not, so the escape hatch is
+    # still spelled out even though the unsubscripted read is not.
+    assert sop.loads[Any]("1") == 1
 
 
 def test_value_names_the_untyped_result():

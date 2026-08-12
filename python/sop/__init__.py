@@ -9,8 +9,10 @@ Two functions.
     text = sop.dumps(order)
 
 Reading takes a shape because text carries no type; writing does not, because
-the object does.  There is no shapeless `loads`: `loads[Any]` is the escape
-hatch and it has to be written down.
+the object does.  `loads` itself is the read at `Value` -- the domain the
+parser produces -- so `loads(text)` is typed precisely rather than untyped.
+Checking off is a separate decision and still has to be written down:
+`loads[Any]` is the escape hatch.
 
 One set of values, immutable, is what reading produces and what the core
 writes; the mutable counterparts are frozen on the way out and spell
@@ -56,8 +58,15 @@ __all__ = [
 ]
 
 
-class _TypedLoads[T]:
-    """`loads[Shape]` — reads a document and returns `Shape`."""
+class _Loads[T]:
+    """`loads[Shape]` — reads a document and returns `Shape`.
+
+    One class, carrying the shape it reads at.  `loads` is this at `Value`,
+    which is what a document says when nothing else is asked of it, so
+    `loads(text)` is not a shapeless read: it is a read at the value domain,
+    spelled by being the default rather than by being written out.  Every
+    other shape is the same object under a different parameter, which is why
+    `read = loads[Order]` is a value like any other."""
 
     __slots__ = ("_shape",)
 
@@ -67,12 +76,8 @@ class _TypedLoads[T]:
     def __call__(self, text: str) -> T:
         return _shape.decode(_loads(text), self._shape)
 
-
-class _Loads:
-    __slots__ = ()
-
-    def __getitem__[T](self, shape: TypeForm[T]) -> _TypedLoads[T]:
-        return _TypedLoads(shape)
+    def __getitem__[S](self, shape: TypeForm[S]) -> _Loads[S]:
+        return _Loads(shape)
 
 
 def dumps(value: object) -> str:
@@ -87,4 +92,4 @@ def dumps(value: object) -> str:
     return _dumps(value, _shape.convert)
 
 
-loads = _Loads()
+loads: _Loads[Value] = _Loads(Value)

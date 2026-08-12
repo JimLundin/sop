@@ -132,8 +132,8 @@ impl Drop for Recursion {
 
 /// A bare identifier used as a scalar. A symbol is never equal to a string,
 /// which is why this is a distinct type and not a `str` subclass.
-#[pyclass(frozen, eq, hash, module = "sop._core")]
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[pyclass(frozen, eq, module = "sop._core")]
+#[derive(PartialEq, Eq, Clone)]
 pub(crate) struct Symbol {
     #[pyo3(get)]
     pub(crate) name: String,
@@ -160,6 +160,21 @@ impl Symbol {
 
     fn __repr__(&self) -> String {
         format!("Symbol({:?})", self.name)
+    }
+
+    /// A frozen dataclass's hash, which is the hash of its fields as a
+    /// tuple -- the same rule `Tagged` follows, and built the same way, so
+    /// the two native types answer by one convention rather than two.
+    ///
+    /// Delegating to Python rather than deriving `hash` on the class is what
+    /// makes this randomised per process. A derived hash runs Rust's
+    /// `DefaultHasher`, which is seeded with a fixed key, so a name would
+    /// answer the same number in every process and never reach Python's
+    /// randomised `str` hash. Symbol names come out of documents, and
+    /// `loads[set[Symbol]]` puts them straight into a hash table, so that is
+    /// a set of colliding keys an attacker can work out in advance.
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        (&self.name,).into_pyobject(py)?.hash()
     }
 
     /// Rebuilt by calling the class with the argument it was built from, so
