@@ -48,6 +48,31 @@ rather than two.
 pure-Python parser and no fallback. **Python 3.15 only** — the
 extension is built against the interpreter it runs on, not the limited API.
 
+Reading a shape happens in three stages, each with one job:
+
+```
+TypeForm  ──analyse──▶  Shape  ──build──▶  Decoder
+what was written        the IR             what runs
+```
+
+`_ir.py` is the shape language written down as a type: a closed sum of frozen
+dataclasses, so a `match` over it is exhaustive and `assert_never` proves it.
+A shape cannot be added without the checkers naming every place that has to
+answer for it, which is what keeps the two directions and the tests in step.
+
+`_analyse.py` decides which `Shape` a `TypeForm` denotes, and is the only
+thing that looks at Python's type language. `_decode.py` compiles a `Shape`
+into the function that reads it — one closure per node, with every dispatch
+decision already made — so decoding is calling a function per node rather than
+matching a shape per value. The compiled decoder for a dataclass is kept on
+the class, which is both the expensive part to work out and the part that has
+to stay collectable.
+
+The IR is a Python object graph and not a serialised one. Both halves of the
+split live in Python — the core owns the value domain, not the shape language
+— so there is no boundary for it to cross, and nothing to give up strict types
+for.
+
 Two functions.
 
 ```python
@@ -162,7 +187,7 @@ meant to be paid back: user classes and subtypes are things to add later.
 | `dict[str, V]` | an object with uniform values |
 | `frozendict[str, V]` | an object, like `dict[str, V]`, read back immutable |
 | `X \| None` | the value, or the symbol `null` |
-| `A \| B \| C` | a discriminated union, keyed on the tag |
+| `A \| B \| C` | a union, keyed on what the document says it is |
 | `Enum` | a symbol, matched on its spelling |
 | a privileged class | `Name "…"` — the five above, matched exactly |
 | `str` | a string, never a symbol |
@@ -190,6 +215,52 @@ neither — `dict[int, V]` — is refused rather than silently coerced. That is 
 limitation of the format as it stands and not a statement about what keys
 ought to be; carrying other key types is a thing to add later, and the shape
 language is where it would be lifted.
+
+A union is read by what the document says it is, not by the order the
+alternatives were written in. Every value on the wire carries a discriminant —
+a tag, a symbol's spelling, or simply its kind — and that is what chooses:
+
+```python
+sop.loads[int | float]("1")  # 1,   an int
+sop.loads[float | int]("1")  # 1,   the same int
+sop.loads[int | float]("1.5")  # 1.5, a float
+```
+
+Number kind is spelling-determined everywhere, unions included, so `int |
+float` and `float | int` are the same shape and read the same way. A shape
+that *names* a value beats one that merely admits it: `float` reads an
+integer-spelled number, but only where no `int` member is there to take it
+first. The wildcards work the same way — `Symbol` takes any symbol and
+`Tagged` any tag, so an enum or a dataclass that names one wins over them.
+
+Two members that cannot be told apart are a schema error, raised when the
+shape is first read rather than on whichever document happens to reach the
+collision:
+
+```
+$: union members Deposit and Deposit cannot be told apart: both read a value tagged `Deposit`
+$: union members list[int] and tuple[int, ...] cannot be told apart: both read an array
+```
+
+That is the whole rule, and it is why there is no order to learn: if a union
+is ambiguous the format says so, and if it is not, the document decides.
+
+A shape may contain itself. A dataclass whose field names it, a pair that name
+each other, and a recursive `type` alias all read:
+
+```python
+@dataclass
+class Node:
+    name: str
+    children: list["Node"]
+
+
+type Tree = int | list[Tree]
+```
+
+The one thing refused is an alias that is directly one of its own
+alternatives — `type Loop = Loop | int` — which has nothing to read before
+reading itself again.
 
 Unknown keys are ignored. A document may carry keys a dataclass does not
 declare, and they are dropped rather than refused, so a reader built against
@@ -246,10 +317,20 @@ writer did not produce.
 Reading mirrors that. `loads[Any]` and `loads[Value]` cost nothing above the
 parse: `Value` is exactly what the parser produces, so reading through it is a
 check that cannot fail, and it answers the parsed value itself rather than
-rebuilding an equal copy. Every other shape is walked in Python, which costs
-roughly **5x** the parse, and a union costs several times that again, because
-its members are tried in turn until one fits. For hot data, prefer a shape
-with no union in it — or read untyped.
+rebuilding an equal copy. Every other shape is compiled once and then run, so
+what a read costs is the walk and not the shape.
+
+`loads[Shape]` holds the compiled decoder, so `read = sop.loads[Order]` pays
+for the shape once however many documents go through it. Writing
+`sop.loads[Order](text)` inline compiles each time; the expensive part — a
+dataclass's fields and their decoders — is kept on the class, so what is
+rebuilt is the wrappers around it, and a one-off read is still cheaper than it
+was before compiling.
+
+A union no longer costs several times what its members cost. It is one lookup
+in a table built when the shape was compiled, so where a value sits among the
+alternatives does not matter: on a list of 2000 records the last of three
+members reads as fast as the first.
 
 ## Layout
 
@@ -265,9 +346,12 @@ src/write.rs         writing Python objects out as text, one traversal
 src/text.rs          shared lexical facts: identifiers, escapes, number spelling
 
 python/sop/__init__.py the public API: loads and dumps
-python/sop/_shape.py  how Python types map onto sop values
-python/sop/_core.pyi  type stubs for the extension, kept by hand
-python/sop/py.typed   PEP 561 marker, so checkers read the stubs
+python/sop/_ir.py      the shape language as a closed sum, and the value domain
+python/sop/_analyse.py which shape a Python type denotes
+python/sop/_decode.py  compiling a shape into the function that reads it
+python/sop/_encode.py  how Python objects are spelled as sop values
+python/sop/_core.pyi   type stubs for the extension, kept by hand
+python/sop/py.typed    PEP 561 marker, so checkers read the stubs
 
 tests/test_corpus.py      the 91 conformance cases
 tests/test_shapes.py      the shape language, both directions, and its errors

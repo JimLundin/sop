@@ -97,8 +97,8 @@ def test_scalar_shapes(shape, text, expected):
         (bool, "Active", "expected `true` or `false`"),
         (float, "true", "expected a number"),
         (type(None), "1", "expected `null`"),
-        (sop.Symbol, '"x"', "expected Symbol"),
-        (sop.Tagged, "1", "expected Tagged"),
+        (sop.Symbol, '"x"', "expected a symbol"),
+        (sop.Tagged, "1", "expected a tagged value"),
     ],
 )
 def test_scalar_mismatch(shape, text, message):
@@ -299,7 +299,9 @@ def test_enum_by_value():
 def test_enum_reads_only_its_spelling():
     # `Blue` is written `azul`; the member's Python name is not a second
     # accepted spelling.
-    with pytest.raises(sop.ShapeError, match="`Blue` is not one of `Red`, `azul`"):
+    with pytest.raises(
+        sop.ShapeError, match="expected `Red` or `azul`, found the symbol `Blue`"
+    ):
         sop.loads[Colour]("Blue")
 
 
@@ -312,12 +314,16 @@ def test_enum_roundtrip():
 
 
 def test_enum_rejects_a_string():
-    with pytest.raises(sop.ShapeError, match="expected a symbol"):
+    with pytest.raises(
+        sop.ShapeError, match="expected `Red` or `azul`, found a string"
+    ):
         sop.loads[Colour]('"azul"')
 
 
 def test_enum_rejects_an_unknown_symbol():
-    with pytest.raises(sop.ShapeError, match="is not one of"):
+    with pytest.raises(
+        sop.ShapeError, match="expected `Red` or `azul`, found the symbol `Green`"
+    ):
         sop.loads[Colour]("Green")
 
 
@@ -356,7 +362,10 @@ def test_a_tagged_class_rejects_a_bare_object():
 
 
 def test_a_tagged_class_rejects_the_wrong_tag():
-    with pytest.raises(sop.ShapeError, match="expected tag `Plain`"):
+    with pytest.raises(
+        sop.ShapeError,
+        match="expected a value tagged `Plain`, found a value tagged `Other`",
+    ):
         sop.loads[Plain]("Other { x: 1 }")
 
 
@@ -420,7 +429,10 @@ def test_a_subclass_of_a_privileged_class_is_not_carried():
 
 
 def test_a_carrier_rejects_the_wrong_tag():
-    with pytest.raises(sop.ShapeError, match="expected tag `Decimal`, found `Swift`"):
+    with pytest.raises(
+        sop.ShapeError,
+        match="expected a value tagged `Decimal`, found a value tagged `Swift`",
+    ):
         sop.loads[Decimal]('Swift "DE89"')
 
 
@@ -434,7 +446,7 @@ def test_a_tag_mismatch_reads_the_same_for_either_carried_kind():
     # place -- so a dataclass and a privileged class do not describe the same
     # mistake two different ways.
     for shape in (Plain, Decimal):
-        with pytest.raises(sop.ShapeError, match="expected tag `"):
+        with pytest.raises(sop.ShapeError, match="expected a value tagged `"):
             sop.loads[shape]('Other "x"')
         with pytest.raises(sop.ShapeError, match="expected a value tagged `"):
             sop.loads[shape]("1")
@@ -534,7 +546,8 @@ def test_tagged_union_names_the_alternatives():
     with pytest.raises(sop.ShapeError) as caught:
         sop.loads[Deposit | Withdraw]("Other { atm: 1 }")
     assert str(caught.value) == (
-        "$: unknown tag `Other`; expected one of `Deposit`, `Withdraw`"
+        "$: expected a value tagged `Deposit` or `Withdraw`, "
+        "found a value tagged `Other`"
     )
 
 
@@ -542,7 +555,7 @@ def test_tagged_union_rejects_an_untagged_value():
     with pytest.raises(sop.ShapeError) as caught:
         sop.loads[Deposit | Withdraw]("{ atm: 1 }")
     assert str(caught.value) == (
-        "$: expected a value tagged `Deposit`, `Withdraw`, found an object"
+        "$: expected a value tagged `Deposit` or `Withdraw`, found an object"
     )
 
 
@@ -552,7 +565,7 @@ def test_untagged_union_tries_each_member():
 
 
 def test_untagged_union_reports_every_reason():
-    with pytest.raises(sop.ShapeError, match="no union member matched"):
+    with pytest.raises(sop.ShapeError, match="expected a string or an integer"):
         sop.loads[int | str]("Active")
 
 
@@ -589,14 +602,18 @@ def test_a_shared_tag_in_a_union_is_an_error():
 
         return Dup
 
-    with pytest.raises(sop.ShapeError, match="share the tag `Dup`"):
+    with pytest.raises(
+        sop.ShapeError, match="cannot be told apart: both read a value tagged `Dup`"
+    ):
         sop.loads[one() | two()]("Dup {x: 1}")
 
 
 def test_a_union_keys_a_privileged_class_on_its_own_name():
     assert sop.loads[Decimal | Plain]('Decimal "19.99"') == Decimal("19.99")
     assert sop.loads[Decimal | Plain]("Plain { x: 1 }") == Plain(1)
-    with pytest.raises(sop.ShapeError, match="expected one of `Decimal`, `Plain`"):
+    with pytest.raises(
+        sop.ShapeError, match="expected a value tagged `Decimal` or `Plain`"
+    ):
         sop.loads[Decimal | Plain]("Nope { x: 1 }")
 
 
@@ -836,3 +853,158 @@ def test_a_configuration_document():
     assert service.canary is False
     assert service.labels == {"tier": "gold"}
     assert roundtrip(Service, service) == service
+
+
+# ---------------------------------------------------------------------------
+# A union is read by what the document says it is
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Amount:
+    n: int
+
+
+class Bearing(enum.Enum):
+    North = "norte"
+
+
+def test_a_union_reads_the_same_whichever_order_it_is_written_in():
+    # The document carries the discriminant, so the order the alternatives
+    # were written in is not part of the shape.  `int | float` is the case
+    # that used to differ: a float shape takes an integer-spelled number, so
+    # whichever member was tried first decided what came back.
+    assert sop.loads[int | float]("1") == 1
+    assert sop.loads[float | int]("1") == 1
+    assert isinstance(sop.loads[float | int]("1"), int)
+    assert isinstance(sop.loads[int | float]("1.5"), float)
+    assert isinstance(sop.loads[float | int]("1.5"), float)
+
+
+def test_number_kind_decides_within_a_union_as_it_does_outside_one():
+    # Spelling determines kind everywhere, unions included.
+    assert isinstance(sop.loads[int | float]("1e3"), float)
+    assert isinstance(sop.loads[int | float]("-0"), int)
+
+
+def test_a_float_shape_still_widens_when_nothing_claims_the_integer():
+    # `Float` takes an integer-spelled number, but only where no `int` member
+    # is there to take it first.
+    assert sop.loads[float | str]("1") == 1.0
+    assert isinstance(sop.loads[float | str]("1"), float)
+
+
+def test_members_that_cannot_be_told_apart_are_refused_when_the_shape_is_read():
+    # Ambiguity is a fact about the schema, not about any one document, so it
+    # is an error the first time the shape is read rather than on whichever
+    # document happens to reach the collision.
+    with pytest.raises(
+        sop.ShapeError, match="cannot be told apart: both read an array"
+    ):
+        sop.loads[list[int] | tuple[int, ...]]("[]")
+    with pytest.raises(
+        sop.ShapeError, match="cannot be told apart: both read an object"
+    ):
+        sop.loads[dict[str, int] | frozendict[str, int]]("{}")
+
+
+def test_two_enums_sharing_a_spelling_cannot_be_told_apart():
+    class Compass(enum.Enum):
+        North = "norte"  # the same spelling as `Bearing.North`
+
+    with pytest.raises(
+        sop.ShapeError, match="cannot be told apart: both read the symbol `norte`"
+    ):
+        sop.loads[Bearing | Compass]("norte")
+
+
+def test_enums_with_disjoint_spellings_discriminate_on_them():
+    class Season(enum.Enum):
+        Summer = "verano"
+
+    assert sop.loads[Bearing | Season]("norte") is Bearing.North
+    assert sop.loads[Season | Bearing]("verano") is Season.Summer
+
+
+def test_a_wildcard_does_not_collide_with_a_member_that_names_the_value():
+    # `Symbol` takes any symbol and `Tagged` any tag, so a shape that names
+    # one beats them rather than being ambiguous with them.
+    assert sop.loads[Bearing | sop.Symbol]("norte") is Bearing.North
+    assert sop.loads[Bearing | sop.Symbol]("otro") == sop.Symbol("otro")
+    assert sop.loads[Amount | sop.Tagged]("Amount {n: 1}") == Amount(1)
+    assert sop.loads[Amount | sop.Tagged]("Other 1") == sop.Tagged("Other", 1)
+
+
+# ---------------------------------------------------------------------------
+# Shapes that contain themselves
+# ---------------------------------------------------------------------------
+
+
+def test_a_recursive_alias_reads():
+    type Tree = int | list[Tree]
+
+    assert sop.loads[Tree]("[1, [2, [3]], 4]") == [1, [2, [3]], 4]
+
+
+def test_a_recursive_alias_through_an_object_reads():
+    type Nest = int | dict[str, Nest]
+
+    assert sop.loads[Nest]("{a: {b: 1}, c: 2}") == {"a": {"b": 1}, "c": 2}
+
+
+def test_an_alias_that_is_one_of_its_own_alternatives_is_refused():
+    # `type T = T | int` has nothing to read before reading itself again.
+    type Loop = Loop | int
+
+    with pytest.raises(sop.ShapeError, match="`Loop` is one of its own union members"):
+        sop.loads[Loop]("1")
+
+
+@dataclass
+class Chain:
+    name: str
+    next: Chain | None = None
+
+
+def test_a_self_referential_dataclass_reads():
+    assert sop.loads[Chain]('Chain {name: "a", next: Chain {name: "b"}}') == Chain(
+        "a", Chain("b")
+    )
+
+
+@dataclass
+class Ping:
+    pong: Pong | None = None
+
+
+@dataclass
+class Pong:
+    ping: Ping | None = None
+
+
+def test_mutually_recursive_dataclasses_read():
+    assert sop.loads[Ping]("Ping {pong: Pong {ping: null}}") == Ping(Pong(None))
+
+
+def test_a_set_shape_needs_the_tag_to_carry_an_array():
+    with pytest.raises(sop.ShapeError, match="`Set` carries an array, found a number"):
+        sop.loads[set[int]]("Set 1")
+
+
+def test_a_union_member_that_is_itself_a_union_answers_for_its_own_members():
+    # An alias can denote a union, so a union's member can be one.  It is left
+    # whole and asked what it reads, rather than being taken apart.
+    type Scalar = int | str
+
+    assert sop.loads[Scalar | None]("1") == 1
+    assert sop.loads[Scalar | None]('"x"') == "x"
+    assert sop.loads[Scalar | None]("null") is None
+    with pytest.raises(sop.ShapeError, match="found the symbol `Active`"):
+        sop.loads[Scalar | None]("Active")
+
+
+def test_a_nested_union_still_collides_across_the_two_levels():
+    type Scalar = int | str
+
+    with pytest.raises(sop.ShapeError, match="cannot be told apart"):
+        sop.loads[Scalar | int]("1")

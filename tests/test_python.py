@@ -722,3 +722,21 @@ def test_what_is_worked_out_about_a_class_dies_with_the_class():
     del sys.modules["sop_throwaway"]
     gc.collect()
     assert seen() is None
+
+
+def test_a_shape_is_compiled_once_however_many_documents_go_through_it():
+    # `loads[Shape]` holds the compiled decoder, so reading a thousand
+    # documents at one shape resolves that shape once.
+    read = sop.loads[Point]
+    first = read("Point {x: 1}")
+    assert read._read is not None
+    compiled = read._read
+    assert read("Point {x: 2}") == Point(2)
+    assert read._read is compiled  # the same decoder, not a second one
+    assert first == Point(1)
+
+
+def test_subscripting_alone_compiles_nothing():
+    # `loads[Shape]` written and not called should cost nothing, so the
+    # shape is not read until a document is.
+    assert sop.loads[Point]._read is None

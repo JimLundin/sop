@@ -663,7 +663,7 @@ def test_every_documented_shape_is_covered_and_nothing_else_is_documented() -> N
 def test_the_privileged_classes_are_one_list_in_three_places() -> None:
     # The one place a test reaches into the SDK, because the point of this gate
     # is that the implementation's table cannot grow a class quietly.
-    from sop._shape import _CARRIERS
+    from sop._ir import CARRIERS as _CARRIERS
 
     implemented = {cls.__name__ for cls in _CARRIERS}
     covered = {shape.__name__ for label, shape, *_ in SUPPORTED if shape in _CARRIED}

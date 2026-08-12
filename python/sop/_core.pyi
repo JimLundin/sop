@@ -8,7 +8,7 @@ from typing import Self, disjoint_base, final
 # at run time -- see `_shape.Value` -- and re-exported here under its own name,
 # so the signatures below mean by `Value` exactly what `sop.Value` is.  The
 # cycle this makes is a checker's to resolve; a stub never runs.
-from ._shape import Value as Value
+from ._ir import Value as Value
 
 @disjoint_base
 class SopError(ValueError):

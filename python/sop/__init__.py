@@ -38,13 +38,15 @@ The format itself is implemented once, in Rust (`sop._core`).  There is no
 pure-Python parser and no fallback.
 """
 
+from collections.abc import Callable
 from typing import TypeForm
 
-from . import _shape
+from . import _encode
 from ._core import ParseError, ShapeError, SopError, Symbol, Tagged
 from ._core import dumps as _dumps
 from ._core import loads as _loads
-from ._shape import Value
+from ._decode import decoder_for as _decoder_for
+from ._ir import Value
 
 __all__ = [
     "ParseError",
@@ -68,13 +70,20 @@ class _Loads[T]:
     other shape is the same object under a different parameter, which is why
     `read = loads[Order]` is a value like any other."""
 
-    __slots__ = ("_shape",)
+    __slots__ = ("_read", "_shape")
 
     def __init__(self, shape: TypeForm[T]) -> None:
         self._shape = shape
+        self._read: Callable[[Value, str], T] | None = None
 
     def __call__(self, text: str) -> T:
-        return _shape.decode(_loads(text), self._shape)
+        # Compiled on the first read and kept, so `read = loads[Order]` pays
+        # for the shape once however many documents go through it.  Lazily,
+        # because subscripting is not reading: `loads[Order]` written and not
+        # called should cost nothing.
+        if (read := self._read) is None:
+            read = self._read = _decoder_for(self._shape)
+        return read(_loads(text), "$")
 
     def __getitem__[S](self, shape: TypeForm[S]) -> _Loads[S]:
         return _Loads(shape)
@@ -86,10 +95,10 @@ def dumps(value: object) -> str:
     The core writer already understands every value `loads` produces, so one
     that came from `loads` is written without touching Python.  Anything else
     -- a dataclass, an enum, a set, a `dict` or a `list` -- is spelled by the
-    shape layer's `convert`, one call per unrecognised object, inside the same
+    writing side's `convert`, one call per unrecognised object, inside the same
     single traversal.
     """
-    return _dumps(value, _shape.convert)
+    return _dumps(value, _encode.convert)
 
 
 loads: _Loads[Value] = _Loads(Value)
