@@ -192,7 +192,9 @@ class Named:
         (sop.Tagged, st.builds(sop.Tagged, identifiers, st.text(max_size=8))),
     ],
 )
-def test_typed_round_trip(shape: TypeForm[Any], strategy):
+def test_typed_round_trip(
+    shape: TypeForm[Any], strategy: st.SearchStrategy[Any]
+) -> None:
     @given(strategy)
     @settings(max_examples=150, deadline=None)
     def check(value: sop.Value) -> None:
@@ -244,7 +246,7 @@ def test_non_finite_floats_have_no_spelling(value: sop.Value) -> None:
 
 
 @given(identifiers | st.text(max_size=10))
-def test_symbol_accepts_exactly_the_identifiers(name: str):
+def test_symbol_accepts_exactly_the_identifiers(name: str) -> None:
     try:
         symbol = sop.Symbol(name)
     except ValueError:

@@ -30,7 +30,16 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Annotated, Any, Literal, NamedTuple, Protocol, TypedDict, TypeForm
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    NamedTuple,
+    Protocol,
+    TypedDict,
+    TypeForm,
+    cast,
+)
 from uuid import UUID
 
 import pytest
@@ -201,7 +210,7 @@ def _taggable(shape: TypeForm[Any]) -> bool:
     return not (isinstance(shape, type) and issubclass(shape, enum.Enum))
 
 
-_LEAVES = [
+_LEAVES: list[TypeForm[Any]] = [
     None,
     bool,
     int,
@@ -224,17 +233,32 @@ _LEAVES = [
 # does not -- neither directly nor through an alias, and neither does a set of
 # a shape that stopped asking questions -- so those are refused shapes below
 # rather than generated ones here.
-_HASHABLE_LEAVES = [
+_HASHABLE_LEAVES: list[TypeForm[Any]] = [
     shape for shape in _LEAVES if shape not in (Any, sop.Value, Numbers)
 ]
 
 # Written out rather than generated from pairs of leaves: two members that
 # share a tag are a schema error the SDK refuses by design, and a union of one
 # arbitrary shape with another mostly draws that.
-_UNIONS = [Point | Label, Point | Label | Wrapper, Point | str, Colour | Point]
+_UNIONS: list[TypeForm[Any]] = [
+    Point | Label,
+    Point | Label | Wrapper,
+    Point | str,
+    Colour | Point,
+]
 
 
 _KEYS = st.text(max_size=6)  # an object's keys, which are strings
+
+
+def _at(origin: Any, *args: Any) -> TypeForm[Any]:
+    """`origin[args]` -- `list[s]`, `dict[str, s]`, `tuple[s, ...]`.
+
+    Written out as a subscript it would read as a type expression with a
+    variable in it, which is not one: the shapes being combined here are
+    values, drawn by Hypothesis, and a call is where both sides agree on
+    that.  What it builds is the same object either spelling produces."""
+    return cast(TypeForm[Any], origin[args[0] if len(args) == 1 else args])
 
 
 def _extend(
@@ -242,26 +266,26 @@ def _extend(
 ) -> st.SearchStrategy[Any]:
     """Every way the shape language builds a shape out of shapes."""
     return (
-        inner.map(lambda s: list[s])
-        | inner.map(lambda s: tuple[s, ...])
-        | inner.map(lambda s: dict[str, s])
-        | inner.map(lambda s: frozendict[str, s])
-        | hashable.map(lambda s: set[s])
-        | hashable.map(lambda s: frozenset[s])
+        inner.map(lambda s: _at(list, s))
+        | inner.map(lambda s: _at(tuple, s, ...))
+        | inner.map(lambda s: _at(dict, str, s))
+        | inner.map(lambda s: _at(frozendict, str, s))
+        | hashable.map(lambda s: _at(set, s))
+        | hashable.map(lambda s: _at(frozenset, s))
         # `None | None` is not a union and not a shape; nothing else is barred.
         | inner.filter(lambda s: s is not None).map(lambda s: s | None)
-        | inner.filter(_taggable).map(lambda s: sop.Tagged[s])
+        | inner.filter(_taggable).map(lambda s: _at(sop.Tagged, s))
     )
 
 
 def _hashable_extend(inner: st.SearchStrategy[Any]) -> st.SearchStrategy[Any]:
     """The subset of the above whose values a set can hold."""
     return (
-        inner.map(lambda s: tuple[s, ...])
-        | inner.map(lambda s: frozenset[s])
-        | inner.map(lambda s: frozendict[str, s])
+        inner.map(lambda s: _at(tuple, s, ...))
+        | inner.map(lambda s: _at(frozenset, s))
+        | inner.map(lambda s: _at(frozendict, str, s))
         | inner.filter(lambda s: s is not None).map(lambda s: s | None)
-        | inner.filter(_taggable).map(lambda s: sop.Tagged[s])
+        | inner.filter(_taggable).map(lambda s: _at(sop.Tagged, s))
     )
 
 
@@ -666,7 +690,7 @@ def test_the_privileged_classes_are_one_list_in_three_places() -> None:
     from sop._ir import CARRIERS as _CARRIERS
 
     implemented = {cls.__name__ for cls in _CARRIERS}
-    covered = {shape.__name__ for label, shape, *_ in SUPPORTED if shape in _CARRIED}
+    covered = {shape.__name__ for _label, shape, *_ in SUPPORTED if shape in _CARRIED}
     assert implemented == covered == _documented("| Class | Carried as |")
 
 

@@ -42,12 +42,26 @@ select = ["E", "F", "B", "I", "UP"]
 "tests/typing_corpus.py" = ["UP007", "UP037", "UP040", "UP045"]
 
 [tool.mypy]
-# The package only.  `tests/typing_corpus.py` is checked by mypy just as
-# strictly, but by `tests/test_typing.py` rather than here: one of its lines
-# is a diagnostic the corpus expects, which this gate could only call a
-# failure.
-files = ["python/sop"]
+# The tests as strictly as the package.  This project is about reading types,
+# so a type error in its own suite is noise standing exactly where a real one
+# would: the suite is held clean so that anything mypy says about it is worth
+# reading.
+files = ["python/sop", "tests"]
+mypy_path = "tests"  # the suite's modules import each other by bare name
 strict = true
+# `tests/typing_corpus.py` is checked by mypy just as strictly, but by
+# `tests/test_typing.py` rather than here: two of its lines are diagnostics
+# the corpus expects and pins, which this gate could only call a failure.
+# Excluded rather than ignored, because a file named on the command line is
+# checked regardless -- which is how `test_typing.py` asks for it.
+exclude = ["tests/typing_corpus\\.py$"]
+
+[[tool.mypy.overrides]]
+# ...and reached through `test_typing.py`'s import of it, which `exclude`
+# does not stop.  Still type checked, so what that module makes of the corpus
+# is still checked; only the corpus's own diagnostics are left to it.
+module = "typing_corpus"
+follow_imports = "silent"
 
 [tool.pyright]
 include = ["python/sop"]

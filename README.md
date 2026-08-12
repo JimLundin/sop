@@ -424,8 +424,13 @@ reads a subscript, the expectation stops matching and this paragraph goes.
 `ty` is not in the table because `typing.TypeForm` is not in its stdlib stubs
 yet, so it cannot read the signature at all.
 
-mypy is the gate, and the corpus is checked by it as strictly as the package
-is. pyright is worth running and stays advisory: it reports five things about
+mypy is the gate, and it covers the tests as strictly as the package -- a
+project about reading types has no business leaving type errors in its own
+suite, where they would stand exactly where a real one would. The corpus is
+the one file held out of that gate, because two of its lines are diagnostics
+it exists to record; `tests/test_typing.py` checks it instead, mypy included.
+
+pyright is worth running and stays advisory: it reports five things about
 `python/sop`, of which three are its bundled typeshed not yet having 3.15's
 `frozendict` constructor — `pyright --typeshedpath` at a newer copy clears
 them — and two are strict-mode lints, one about a `match` that is exhaustive

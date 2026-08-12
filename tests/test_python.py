@@ -39,7 +39,7 @@ class Point:
 # ---------------------------------------------------------------------------
 
 
-def test_distinguished_symbols_become_python_values():
+def test_distinguished_symbols_become_python_values() -> None:
     # The core has no bool and no null: these arrive as symbols and the SDK
     # chooses what they mean.
     assert sop.loads[Any]("{a: true, b: false, c: null}") == {
@@ -49,15 +49,15 @@ def test_distinguished_symbols_become_python_values():
     }
 
 
-def test_and_they_go_back():
+def test_and_they_go_back() -> None:
     assert sop.dumps({"a": True, "b": False, "c": None}) == "{a:true,b:false,c:null}"
 
 
-def test_any_other_symbol_stays_a_symbol():
+def test_any_other_symbol_stays_a_symbol() -> None:
     assert sop.loads[Any]("Active") == sop.Symbol("Active")
 
 
-def test_untyped_reading_produces_immutable_values():
+def test_untyped_reading_produces_immutable_values() -> None:
     # The whole untyped result is immutable; mutation is something a shape
     # such as `list[T]` or `dict[str, V]` has to declare.
     value = sop.loads[Any]("{a: [1, 2], b: {c: 3}}")
@@ -68,7 +68,7 @@ def test_untyped_reading_produces_immutable_values():
         value["d"] = 4  # type: ignore[index]
 
 
-def test_bool_is_not_written_as_a_number():
+def test_bool_is_not_written_as_a_number() -> None:
     # bool subclasses int in Python, so the writer has to test it first.
     assert sop.dumps(True) == "true"
     assert sop.dumps(1) == "1"
@@ -81,25 +81,25 @@ def test_bool_is_not_written_as_a_number():
 
 
 @pytest.mark.parametrize("name", ["true", "false", "null"])
-def test_symbol_refuses_the_names_python_already_spells(name):
+def test_symbol_refuses_the_names_python_already_spells(name: str) -> None:
     with pytest.raises(ValueError, match="spelled with the Python value"):
         sop.Symbol(name)
 
 
 @pytest.mark.parametrize("name", ["a b", "", "1x", "a,b", "a.b"])
-def test_symbol_requires_an_identifier(name):
+def test_symbol_requires_an_identifier(name: str) -> None:
     with pytest.raises(ValueError, match="not an identifier"):
         sop.Symbol(name)
 
 
 @pytest.mark.parametrize("tag", ["a b", "", "1x"])
-def test_tagged_requires_an_identifier_tag(tag):
+def test_tagged_requires_an_identifier_tag(tag: str) -> None:
     with pytest.raises(ValueError, match="not an identifier"):
         sop.Tagged(tag, 1)
 
 
 @pytest.mark.parametrize("payload", [None, True, False])
-def test_tagged_refuses_what_spells_as_a_symbol(payload):
+def test_tagged_refuses_what_spells_as_a_symbol(payload: bool | None) -> None:
     # A tag cannot be applied to a bare symbol, so such a value could never
     # be written or read back; it is refused at construction.
     with pytest.raises(ValueError, match="bare symbol"):
@@ -108,14 +108,14 @@ def test_tagged_refuses_what_spells_as_a_symbol(payload):
         sop.Tagged("t", sop.Symbol("x"))
 
 
-def test_a_missing_comma_is_an_error_not_a_tag():
+def test_a_missing_comma_is_an_error_not_a_tag() -> None:
     # `[Red Green]` used to denote one doubly-named value; a bare symbol
     # cannot be a tag's payload, so the typo is caught where it happens.
     with pytest.raises(sop.SopError, match="bare symbol"):
         sop.loads[Any]("[Red Green]")
 
 
-def test_unicode_identifiers_are_fine():
+def test_unicode_identifiers_are_fine() -> None:
     assert sop.Symbol("été").name == "été"
     assert sop.dumps({"été": sop.Symbol("café")}) == "{été:café}"
 
@@ -125,18 +125,18 @@ def test_unicode_identifiers_are_fine():
 # ---------------------------------------------------------------------------
 
 
-def test_a_symbol_is_not_a_string():
-    assert sop.Symbol("x") != "x"
+def test_a_symbol_is_not_a_string() -> None:
+    assert sop.Symbol("x") != "x"  # type: ignore[comparison-overlap]
     assert sop.loads[Any]("Active") != "Active"
 
 
-def test_a_tagged_value_is_not_its_payload():
-    assert sop.Tagged("a", 1) != 1
+def test_a_tagged_value_is_not_its_payload() -> None:
+    assert sop.Tagged("a", 1) != 1  # type: ignore[comparison-overlap]
     assert sop.Tagged("a", 1) != sop.Tagged("b", 1)
     assert sop.Tagged("a", 1) == sop.Tagged("a", 1)
 
 
-def test_tagged_equality_defers_to_the_other_operand():
+def test_tagged_equality_defers_to_the_other_operand() -> None:
     # For anything that is not a Tagged, __eq__ answers NotImplemented rather
     # than False, so Python asks the other side before settling the question.
     class Agreeable:
@@ -147,12 +147,12 @@ def test_tagged_equality_defers_to_the_other_operand():
     assert Agreeable() == sop.Tagged("a", 1)
 
 
-def test_symbols_are_hashable_and_usable_as_keys():
+def test_symbols_are_hashable_and_usable_as_keys() -> None:
     assert {sop.Symbol("a"): 1}[sop.Symbol("a")] == 1
     assert len({sop.Symbol("a"), sop.Symbol("a")}) == 1
 
 
-def test_tagged_hashes_like_a_frozen_dataclass():
+def test_tagged_hashes_like_a_frozen_dataclass() -> None:
     # Equal values must hash equal, or sets and dicts misbehave.
     assert hash(sop.Tagged("a", 1)) == hash(sop.Tagged("a", 1))
     assert len({sop.Tagged("a", 1), sop.Tagged("a", 1)}) == 1
@@ -163,7 +163,7 @@ def test_tagged_hashes_like_a_frozen_dataclass():
         hash(sop.Tagged("a", [1]))
 
 
-def test_tagged_hashes_as_the_same_number_a_frozen_dataclass_would():
+def test_tagged_hashes_as_the_same_number_a_frozen_dataclass_would() -> None:
     # Not merely "agrees with `__eq__`" -- the same number, because it *is*
     # the hash of `(tag, value)`.  A hash mixed together in the extension
     # would satisfy `__eq__` just as well and still be wrong here.
@@ -179,7 +179,7 @@ def test_tagged_hashes_as_the_same_number_a_frozen_dataclass_would():
         assert hash(sop.Tagged(tag, payload)) == hash((tag, payload))
 
 
-def test_a_tag_does_not_hash_the_same_in_every_process():
+def test_a_tag_does_not_hash_the_same_in_every_process() -> None:
     # Hash randomisation is what stops keys taken from a document being made
     # to collide, and tags are taken from documents.  A hash of the SDK's own
     # would answer the same number in every process, so an attacker could
@@ -198,7 +198,7 @@ def test_a_tag_does_not_hash_the_same_in_every_process():
     assert len(seen) == 3
 
 
-def test_every_value_survives_copying_and_pickling():
+def test_every_value_survives_copying_and_pickling() -> None:
     # A value handed to a worker process is pickled there and back, so one
     # that cannot be rebuilt is one the caller never gets to read.  Every
     # other member of `Value` already round-trips; `Symbol` and `Tagged` are
@@ -222,7 +222,7 @@ def test_every_value_survives_copying_and_pickling():
     assert sop.dumps(pickle.loads(pickle.dumps(parsed))) == sop.dumps(parsed)
 
 
-def test_a_deep_copy_copies_the_payload_and_a_shallow_one_does_not():
+def test_a_deep_copy_copies_the_payload_and_a_shallow_one_does_not() -> None:
     # The payload is one of the arguments the value is rebuilt from, so the
     # two kinds of copy differ in the way they do everywhere else.
     payload = [1, 2]
@@ -232,7 +232,7 @@ def test_a_deep_copy_copies_the_payload_and_a_shallow_one_does_not():
     assert copy.deepcopy(tagged).value is not payload
 
 
-def test_a_value_is_rebuilt_by_calling_its_class():
+def test_a_value_is_rebuilt_by_calling_its_class() -> None:
     # Rebuilding goes back through the constructor rather than restoring the
     # fields behind its back...
     assert sop.Symbol("s").__reduce__() == (sop.Symbol, ("s",))
@@ -247,14 +247,16 @@ def test_a_value_is_rebuilt_by_calling_its_class():
     ):
 
         class Forged:
-            def __reduce__(self, arguments=arguments):
+            def __reduce__(
+                self, arguments: tuple[Any, ...] = arguments
+            ) -> tuple[Any, ...]:
                 return arguments
 
         with pytest.raises(ValueError, match=refused):
             pickle.loads(pickle.dumps(Forged()))
 
 
-def test_native_values_are_immutable():
+def test_native_values_are_immutable() -> None:
     with pytest.raises(AttributeError):
         sop.Symbol("x").name = "y"  # type: ignore[misc]
     with pytest.raises(AttributeError):
@@ -266,21 +268,21 @@ def test_native_values_are_immutable():
 # ---------------------------------------------------------------------------
 
 
-def test_shape_error_is_a_sop_error():
+def test_shape_error_is_a_sop_error() -> None:
     # One `except` covers both failure modes.
     assert issubclass(sop.ShapeError, sop.SopError)
     with pytest.raises(sop.SopError):
         sop.loads[int]('"x"')
 
 
-def test_parse_errors_carry_a_position():
-    with pytest.raises(sop.SopError) as caught:
+def test_parse_errors_carry_a_position() -> None:
+    with pytest.raises(sop.ParseError) as caught:
         sop.loads[Any]("[\n  1,\n  2 3\n]")
     assert (caught.value.line, caught.value.column) == (3, 5)
     assert "," in caught.value.message
 
 
-def test_shape_errors_carry_a_path():
+def test_shape_errors_carry_a_path() -> None:
     with pytest.raises(sop.ShapeError) as caught:
         sop.loads[dict[str, int]]("{a: Active}")
     assert str(caught.value).startswith("$.a: ")
@@ -290,7 +292,7 @@ def test_shape_errors_carry_a_path():
     assert not hasattr(caught.value, "line")
 
 
-def test_every_error_survives_a_round_trip():
+def test_every_error_survives_a_round_trip() -> None:
     # An exception raised in a worker process is pickled back to its parent,
     # so an error that cannot be rebuilt from its own `args` is one the
     # caller never gets to read. Each class is reconstructed by calling it
@@ -317,7 +319,7 @@ def test_every_error_survives_a_round_trip():
         assert copy.message == error.message
 
 
-def test_the_error_subclasses_are_final():
+def test_the_error_subclasses_are_final() -> None:
     # `SopError` is the one open class, so a caller can extend the `except`
     # that already catches everything; the two below it each carry the one
     # location they have and are closed.  The stubs say `@final` of exactly
@@ -331,7 +333,7 @@ def test_the_error_subclasses_are_final():
             type("Nope", (closed,), {})
 
 
-def test_an_error_is_built_location_first_and_cannot_be_edited_after():
+def test_an_error_is_built_location_first_and_cannot_be_edited_after() -> None:
     # Both subclasses are the base plus a location, so both take the location
     # first, in the order `__str__` renders it.  And the native types are
     # frozen, errors included: what an error says about where it happened is
@@ -354,7 +356,7 @@ def test_an_error_is_built_location_first_and_cannot_be_edited_after():
             setattr(error, attribute, "edited")
 
 
-def test_a_write_error_names_where_in_the_value_it_failed():
+def test_a_write_error_names_where_in_the_value_it_failed() -> None:
     # The path is assembled as the error leaves the traversal, so it reads
     # exactly as the reader's does -- and costs nothing when nothing fails.
     @dataclass
@@ -376,7 +378,7 @@ def test_a_write_error_names_where_in_the_value_it_failed():
     assert bare.value.path == "$"
 
 
-def test_a_non_sop_error_from_the_hook_passes_through_unlocated():
+def test_a_non_sop_error_from_the_hook_passes_through_unlocated() -> None:
     # Only the writer's own errors collect a path; `Tagged` refusing a bare
     # symbol is a plain ValueError and the writer does not restate it.
     with pytest.raises(ValueError, match="bare symbol") as caught:
@@ -384,7 +386,7 @@ def test_a_non_sop_error_from_the_hook_passes_through_unlocated():
     assert not isinstance(caught.value, sop.SopError)
 
 
-def test_each_error_carries_only_the_location_it_has():
+def test_each_error_carries_only_the_location_it_has() -> None:
     # Reading text has a position, reading a value has a path, and writing
     # has neither; none of the three invents one of the others.
     with pytest.raises(sop.ParseError) as parsed:
@@ -398,7 +400,7 @@ def test_each_error_carries_only_the_location_it_has():
     assert not hasattr(shaped.value, "line")
 
 
-def test_loads_is_the_read_at_value():
+def test_loads_is_the_read_at_value() -> None:
     # `loads` carries a shape like every other `loads[S]`; the shape it
     # carries is `Value`.  So an unsubscripted read is not a shapeless one --
     # it is typed as the domain the parser produces, and answers exactly what
@@ -407,20 +409,20 @@ def test_loads_is_the_read_at_value():
     assert sop.loads(text) == sop.loads[sop.Value](text)
 
 
-def test_turning_checking_off_still_has_to_be_written_down():
+def test_turning_checking_off_still_has_to_be_written_down() -> None:
     # `Value` is a precise type and `Any` is not, so the escape hatch is
     # still spelled out even though the unsubscripted read is not.
     assert sop.loads[Any]("1") == 1
 
 
-def test_value_names_the_untyped_result():
+def test_value_names_the_untyped_result() -> None:
     # `Value` is the closed set untyped reading produces, so reading through
     # it changes nothing about the result.
     text = '{a: [1, "x", Active], b: Uuid "9f1c", c: null, d: [true, 1.5], e: Set [2]}'
     assert sop.loads[sop.Value](text) == sop.loads[Any](text)
 
 
-def test_the_value_shape_does_not_re_walk_the_parsed_value():
+def test_the_value_shape_does_not_re_walk_the_parsed_value() -> None:
     # `Value` is a check that cannot fail, so it answers what was parsed
     # rather than walking it to build an equal copy.  Walking it would exhaust
     # the stack on a document the parser itself handles comfortably.
@@ -428,12 +430,14 @@ def test_the_value_shape_does_not_re_walk_the_parsed_value():
     assert sop.loads[sop.Value](deep) == sop.loads[Any](deep)
 
 
-def test_a_type_alias_is_its_right_hand_side():
-    type Port = int
+type Port = int
+
+
+def test_a_type_alias_is_its_right_hand_side() -> None:
     assert sop.loads[Port]("8080") == 8080
 
 
-def test_unencodable_object():
+def test_unencodable_object() -> None:
     # The core rejects it first and asks the shape layer, which rejects it
     # too; the core is what was walking, so the core is what says where.
     with pytest.raises(sop.ShapeError, match=r"^\$: cannot encode object"):
@@ -445,23 +449,23 @@ def test_unencodable_object():
 # ---------------------------------------------------------------------------
 
 
-def test_insertion_order_is_preserved():
+def test_insertion_order_is_preserved() -> None:
     assert list(sop.loads[Any]("{b: 1, a: 2, c: 3}")) == ["b", "a", "c"]
 
 
-def test_duplicate_keys_take_the_last_value_in_the_first_position():
+def test_duplicate_keys_take_the_last_value_in_the_first_position() -> None:
     assert sop.loads[Any]("{a: 1, b: 2, a: 3}") == {"a": 3, "b": 2}
     assert list(sop.loads[Any]("{a: 1, b: 2, a: 3}")) == ["a", "b"]
 
 
-def test_object_keys_must_be_strings():
+def test_object_keys_must_be_strings() -> None:
     # Not coerced with str(): `{1: "a"}` and `{"1": "a"}` are different Python
     # values and quietly conflating them is the SDK inventing a mapping.
     with pytest.raises(sop.SopError, match="keys must be strings"):
         sop.dumps({1: "a"})
 
 
-def test_a_str_subclass_cannot_be_an_object_key():
+def test_a_str_subclass_cannot_be_an_object_key() -> None:
     # A subclass of `str` has no sop spelling as a value, so it does not get
     # one as a key either -- and a key is the one position the shape layer
     # never sees, so the core has to refuse it itself.
@@ -477,30 +481,30 @@ def test_a_str_subclass_cannot_be_an_object_key():
 # ---------------------------------------------------------------------------
 
 
-def test_integers_are_exact_within_the_range():
+def test_integers_are_exact_within_the_range() -> None:
     for value in (0, -1, 2**53 + 1, 2**63 - 1, -(2**63)):
         assert sop.loads[int](sop.dumps(value)) == value
 
 
-def test_integers_outside_the_range_are_refused_on_write():
+def test_integers_outside_the_range_are_refused_on_write() -> None:
     # Writing one would produce a document that cannot be read back to an
     # equal value, so it is refused rather than quietly rounded.
     with pytest.raises(sop.SopError, match="out of range"):
         sop.dumps(2**63)
 
 
-def test_out_of_range_literals_are_refused_on_read():
+def test_out_of_range_literals_are_refused_on_read() -> None:
     with pytest.raises(sop.SopError, match="out of range"):
         sop.loads[Any]("1e400")
 
 
-def test_non_finite_floats_have_no_spelling():
+def test_non_finite_floats_have_no_spelling() -> None:
     for value in (float("inf"), float("-inf"), float("nan")):
         with pytest.raises(sop.SopError, match="no sop representation"):
             sop.dumps(value)
 
 
-def test_a_float_keeps_its_kind():
+def test_a_float_keeps_its_kind() -> None:
     # Number kind is spelling-determined: digits alone denote an integer, so
     # a float always keeps a point or an exponent.
     assert sop.dumps(2.0) == "2.0"
@@ -514,7 +518,7 @@ def test_a_float_keeps_its_kind():
     assert sop.loads[float]("2") == 2.0  # an integer literal is still a number
 
 
-def test_negative_zero_keeps_its_sign():
+def test_negative_zero_keeps_its_sign() -> None:
     assert sop.dumps(-0.0) == "-0.0"
     assert math.copysign(1, sop.loads[Any]("-0.0")) == -1.0
 
@@ -524,7 +528,7 @@ def test_negative_zero_keeps_its_sign():
 # ---------------------------------------------------------------------------
 
 
-def test_depth_is_bounded_by_the_interpreter_not_the_sdk():
+def test_depth_is_bounded_by_the_interpreter_not_the_sdk() -> None:
     # The core is iterative and reads any depth. Building the Python value is
     # recursive, so past the interpreter's own stack limit the SDK raises
     # RecursionError rather than imposing a limit -- or crashing.
@@ -541,22 +545,22 @@ def test_depth_is_bounded_by_the_interpreter_not_the_sdk():
 # ---------------------------------------------------------------------------
 
 
-def test_plain_values_take_the_fast_path():
+def test_plain_values_take_the_fast_path() -> None:
     value = sop.loads[Any]('{a: [1, "x", Active], b: Uuid "9f1c"}')
     assert sop.dumps(value) == '{a:[1,"x",Active],b:Uuid "9f1c"}'
 
 
-def test_a_typed_object_is_converted():
+def test_a_typed_object_is_converted() -> None:
     assert sop.dumps(Point(1)) == "Point {x:1}"
 
 
-def test_a_mixed_graph_converts_in_place():
+def test_a_mixed_graph_converts_in_place() -> None:
     # The traversal happens once; the convert hook spells each unknown object
     # where it is met, and the plain values around it never touch Python.
     assert sop.dumps({"a": 1, "b": Point(2), "c": [3]}) == "{a:1,b:Point {x:2},c:[3]}"
 
 
-def test_a_tag_cannot_wrap_a_value_that_spells_as_a_symbol():
+def test_a_tag_cannot_wrap_a_value_that_spells_as_a_symbol() -> None:
     # Tagged(t, enum_member) is constructible -- the payload is an object --
     # but the member spells as a symbol, which a tag cannot apply to.
     class Status(enum.Enum):
@@ -566,15 +570,15 @@ def test_a_tag_cannot_wrap_a_value_that_spells_as_a_symbol():
         sop.dumps(sop.Tagged("t", Status.Up))
 
 
-def test_a_subclass_is_carried_as_what_it_is():
+def test_a_subclass_is_carried_as_what_it_is() -> None:
     # A subclass is still a list, a dict or a tuple and is written as one --
     # under its own name, so what the data was stays visible.  Only the
     # builtins the format spells natively go untagged.
-    class Roles(list): ...
+    class Roles(list[int]): ...
 
-    class Ordered(dict): ...
+    class Ordered(dict[str, int]): ...
 
-    class Pair(tuple): ...
+    class Pair(tuple[int, ...]): ...
 
     assert sop.dumps(Roles([1, 2])) == "Roles [1,2]"
     assert sop.dumps(Pair((1, 2))) == "Pair [1,2]"
@@ -584,11 +588,11 @@ def test_a_subclass_is_carried_as_what_it_is():
     assert sop.dumps({"paid": Decimal("19.99")}) == '{paid:Decimal "19.99"}'
 
 
-def test_a_runaway_value_is_an_error_not_a_crash():
+def test_a_runaway_value_is_an_error_not_a_crash() -> None:
     # The writer walks a value the caller built, which can nest arbitrarily or
     # cyclically. CPython's recursion guard turns that into RecursionError at
     # the interpreter's limit; the stack must never actually overflow.
-    cycle = []
+    cycle: list[object] = []
     cycle.append(cycle)
     with pytest.raises(RecursionError):
         sop.dumps(cycle)
@@ -600,7 +604,7 @@ def test_a_runaway_value_is_an_error_not_a_crash():
         sop.dumps(loop)
 
 
-def test_a_lone_surrogate_has_no_spelling():
+def test_a_lone_surrogate_has_no_spelling() -> None:
     # The parser rejects the escape; the writer refuses the value, as SopError.
     with pytest.raises(sop.SopError, match="lone surrogate"):
         sop.dumps("a\ud800b")
@@ -625,40 +629,40 @@ def test_a_lone_surrogate_has_no_spelling():
         ("[]", "an array"),
     ],
 )
-def test_errors_name_what_was_actually_there(text, description):
+def test_errors_name_what_was_actually_there(text: str, description: str) -> None:
     with pytest.raises(sop.ShapeError, match=re.escape(description)):
         sop.loads[Point](text)
 
 
-def test_a_tagged_value_is_named_where_something_else_was_expected():
+def test_a_tagged_value_is_named_where_something_else_was_expected() -> None:
     # Not through a dataclass shape: that compares tags and says so, where
     # this is the arm that describes a tagged value as what was found.
     with pytest.raises(sop.ShapeError, match=re.escape("a value tagged `Uuid`")):
         sop.loads[int]('Uuid "x"')
 
 
-def test_an_object_of_the_wrong_shape_reports_the_missing_key():
+def test_an_object_of_the_wrong_shape_reports_the_missing_key() -> None:
     with pytest.raises(sop.ShapeError, match="missing key"):
         sop.loads[Point]("Point {}")
 
 
-def test_an_unknown_python_object_is_described_by_its_type():
+def test_an_unknown_python_object_is_described_by_its_type() -> None:
     with pytest.raises(sop.ShapeError, match="cannot encode complex"):
         sop.dumps(1 + 2j)
 
 
-def test_a_tag_wrapping_a_typed_object_is_encoded_through():
+def test_a_tag_wrapping_a_typed_object_is_encoded_through() -> None:
     # The payload of a Tagged is not assumed to be a plain value already.
     assert sop.dumps(sop.Tagged("wrapper", Point(1))) == "wrapper Point {x:1}"
 
 
-def test_a_symbol_inside_a_typed_graph_is_encoded():
+def test_a_symbol_inside_a_typed_graph_is_encoded() -> None:
     # Symbols only reach the shape layer when something else in the graph sent
     # the whole value down the fallback path.
     assert sop.dumps({"a": Point(1), "b": sop.Symbol("x")}) == "{a:Point {x:1},b:x}"
 
 
-def test_a_class_outside_the_privileged_set_is_not_carried():
+def test_a_class_outside_the_privileged_set_is_not_carried() -> None:
     # There is no dunder, no registry and no decorator: a class the SDK does
     # not already know is refused, in both directions.
     class Opaque:
@@ -675,7 +679,7 @@ def test_a_class_outside_the_privileged_set_is_not_carried():
 # ---------------------------------------------------------------------------
 
 
-def test_a_subclass_does_not_inherit_what_was_worked_out_for_its_base():
+def test_a_subclass_does_not_inherit_what_was_worked_out_for_its_base() -> None:
     # A class's fields and annotations are resolved once and kept on the class
     # itself, so they are read off that class and never off a base.  The base
     # is written first on purpose: that is what fills its own answers in, and
@@ -693,7 +697,7 @@ def test_a_subclass_does_not_inherit_what_was_worked_out_for_its_base():
     assert sop.loads[Sub]('Sub {a:1,b:"y"}') == Sub(1, "y")
 
 
-def test_what_is_worked_out_about_a_class_dies_with_the_class():
+def test_what_is_worked_out_about_a_class_dies_with_the_class() -> None:
     # Those answers are kept on the class rather than in a table here, so a
     # class built at run time is collectable once nothing else refers to it.
     # `Node` is self-referential on purpose: its own annotation names it, so
@@ -724,7 +728,7 @@ def test_what_is_worked_out_about_a_class_dies_with_the_class():
     assert seen() is None
 
 
-def test_a_shape_is_compiled_once_however_many_documents_go_through_it():
+def test_a_shape_is_compiled_once_however_many_documents_go_through_it() -> None:
     # `loads[Shape]` holds the compiled decoder, so reading a thousand
     # documents at one shape resolves that shape once.
     read = sop.loads[Point]
@@ -736,7 +740,7 @@ def test_a_shape_is_compiled_once_however_many_documents_go_through_it():
     assert first == Point(1)
 
 
-def test_subscripting_alone_compiles_nothing():
+def test_subscripting_alone_compiles_nothing() -> None:
     # `loads[Shape]` written and not called should cost nothing, so the
     # shape is not read until a document is.
     assert sop.loads[Point]._read is None
