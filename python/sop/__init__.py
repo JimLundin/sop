@@ -74,7 +74,7 @@ class _Loads[T]:
 
     def __init__(self, shape: TypeForm[T]) -> None:
         self._shape = shape
-        self._read: Callable[[Value, str], T] | None = None
+        self._read: Callable[[Value], T] | None = None
 
     def __call__(self, text: str) -> T:
         # Compiled on the first read and kept, so `read = loads[Order]` pays
@@ -83,7 +83,11 @@ class _Loads[T]:
         # called should cost nothing.
         if (read := self._read) is None:
             read = self._read = _decoder_for(self._shape)
-        return read(_loads(text), "$")
+        try:
+            return read(_loads(text))
+        except ShapeError as exc:
+            # The root, spelled once, where the failure leaves the traversal.
+            raise ShapeError("$" + exc.path, exc.message) from None
 
     def __getitem__[S](self, shape: TypeForm[S]) -> _Loads[S]:
         return _Loads(shape)

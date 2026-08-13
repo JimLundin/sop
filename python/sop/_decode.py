@@ -46,8 +46,13 @@ from ._ir import (
 )
 from ._ir import Bool as BoolShape
 
-type Decoder = Callable[[Value, str], Any]
-"""A value and the path it sits at, answered as whatever its shape said."""
+type Decoder = Callable[[Value], Any]
+"""A value, answered as whatever its shape said.
+
+No path: a decoder is not told where it sits.  The place a read failed is
+assembled from the frames it unwinds through, so a read that succeeds never
+builds one -- which is what the writer already does, and for the same
+reason."""
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +115,17 @@ def _slot_of(value: Value, kind: Kind) -> Slot:
     return kind
 
 
-def _wrong(shape: Shape, value: Value, path: str) -> ShapeError:
-    return ShapeError(path, f"expected {names(shape)}, found {describe(value)}")
+def _wrong(shape: Shape, value: Value) -> ShapeError:
+    """A failure at the value in hand, which names no place yet: the frames it
+    unwinds through are what know where that is."""
+    return ShapeError("", f"expected {names(shape)}, found {describe(value)}")
+
+
+def _under(segment: str, exc: ShapeError) -> ShapeError:
+    """The same failure, one step further out.  A step is prepended here
+    rather than a path carried on the way in, so nothing pays for knowing
+    where until something fails."""
+    return ShapeError(segment + exc.path, exc.message)
 
 
 # ---------------------------------------------------------------------------
@@ -137,62 +151,62 @@ def build(shape: Shape, memo: _Memo | None = None) -> Decoder:
         memo = {}
     match shape:
         case Dynamic():
-            return lambda value, path: value
+            return lambda value: value
 
         case Null():
 
-            def null(value: Value, path: str) -> None:
+            def null(value: Value) -> None:
                 if value is not None:
-                    raise _wrong(shape, value, path)
+                    raise _wrong(shape, value)
                 return None
 
             return null
 
         case BoolShape():
 
-            def boolean(value: Value, path: str) -> bool:
+            def boolean(value: Value) -> bool:
                 if not isinstance(value, bool):
-                    raise _wrong(shape, value, path)
+                    raise _wrong(shape, value)
                 return value
 
             return boolean
 
         case Int():
 
-            def integer(value: Value, path: str) -> int:
+            def integer(value: Value) -> int:
                 # bool subclasses int in Python; a sop boolean is a symbol.
                 if isinstance(value, bool) or not isinstance(value, int):
-                    raise _wrong(shape, value, path)
+                    raise _wrong(shape, value)
                 return value
 
             return integer
 
         case Float():
 
-            def number(value: Value, path: str) -> float:
+            def number(value: Value) -> float:
                 # A float-spelled number only.  `1` is an integer by the
                 # format's own rule, and reading it here would be a guess.
                 if not isinstance(value, float):
-                    raise _wrong(shape, value, path)
+                    raise _wrong(shape, value)
                 return value
 
             return number
 
         case Str():
 
-            def text(value: Value, path: str) -> str:
+            def text(value: Value) -> str:
                 # A symbol is never a string, so `Active` is not "Active".
                 if not isinstance(value, str):
-                    raise _wrong(shape, value, path)
+                    raise _wrong(shape, value)
                 return value
 
             return text
 
         case SymbolOf():
 
-            def symbol(value: Value, path: str) -> Symbol:
+            def symbol(value: Value) -> Symbol:
                 if not isinstance(value, Symbol):
-                    raise _wrong(shape, value, path)
+                    raise _wrong(shape, value)
                 return value
 
             return symbol
@@ -200,12 +214,12 @@ def build(shape: Shape, memo: _Memo | None = None) -> Decoder:
         case EnumOf(cls, _):
             by_spelling = {enum_spelling(m): m for m in cls}
 
-            def member(value: Value, path: str) -> enum.Enum:
+            def member(value: Value) -> enum.Enum:
                 if not isinstance(value, Symbol):
-                    raise _wrong(shape, value, path)
+                    raise _wrong(shape, value)
                 found = by_spelling.get(value.name)
                 if found is None:
-                    raise _wrong(shape, value, path)
+                    raise _wrong(shape, value)
                 return found
 
             return member
@@ -213,10 +227,15 @@ def build(shape: Shape, memo: _Memo | None = None) -> Decoder:
         case ArrayOf(item, mutable):
             each = build(item, memo)
 
-            def array(value: Value, path: str) -> Any:
+            def array(value: Value) -> Any:
                 if not isinstance(value, tuple):
-                    raise _wrong(shape, value, path)
-                read = [each(v, f"{path}[{i}]") for i, v in enumerate(value)]
+                    raise _wrong(shape, value)
+                read: list[Any] = []
+                for index, element in enumerate(value):
+                    try:
+                        read.append(each(element))
+                    except ShapeError as exc:
+                        raise _under(f"[{index}]", exc) from None
                 return read if mutable else tuple(read)
 
             return array
@@ -224,15 +243,20 @@ def build(shape: Shape, memo: _Memo | None = None) -> Decoder:
         case SetOf(item, mutable):
             each_element = build(item, memo)
 
-            def as_set(value: Value, path: str) -> Any:
+            def as_set(value: Value) -> Any:
                 if not isinstance(value, Tagged) or value.tag != "Set":
-                    raise _wrong(shape, value, path)
+                    raise _wrong(shape, value)
                 body = value.value
                 if not isinstance(body, tuple):
                     raise ShapeError(
-                        path, f"`Set` carries an array, found {describe(body)}"
+                        "", f"`Set` carries an array, found {describe(body)}"
                     )
-                read = [each_element(v, f"{path}[]") for v in body]
+                read: list[Any] = []
+                for element in body:
+                    try:
+                        read.append(each_element(element))
+                    except ShapeError as exc:
+                        raise _under("[]", exc) from None
                 try:
                     return set(read) if mutable else frozenset(read)
                 except TypeError as exc:
@@ -240,17 +264,22 @@ def build(shape: Shape, memo: _Memo | None = None) -> Decoder:
                     # or a set of a dataclass that is not frozen.  Decoded first
                     # and built after, so an element's own failure stays its own
                     # error and only the building is caught here.
-                    raise ShapeError(path, f"unsupported shape: {exc}") from None
+                    raise ShapeError("", f"unsupported shape: {exc}") from None
 
             return as_set
 
         case MappingOf(item, mutable):
             each_value = build(item, memo)
 
-            def mapping(value: Value, path: str) -> Any:
+            def mapping(value: Value) -> Any:
                 if not isinstance(value, frozendict):
-                    raise _wrong(shape, value, path)
-                read = {k: each_value(v, f"{path}.{k}") for k, v in value.items()}
+                    raise _wrong(shape, value)
+                read: dict[str, Any] = {}
+                for key, element in value.items():
+                    try:
+                        read[key] = each_value(element)
+                    except ShapeError as exc:
+                        raise _under(f".{key}", exc) from None
                 return read if mutable else frozendict(read)
 
             return mapping
@@ -258,23 +287,23 @@ def build(shape: Shape, memo: _Memo | None = None) -> Decoder:
         case TaggedOf(payload):
             each_payload = build(payload, memo)
 
-            def tagged(value: Value, path: str) -> Tagged[Any]:
+            def tagged(value: Value) -> Tagged[Any]:
                 if not isinstance(value, Tagged):
-                    raise _wrong(shape, value, path)
-                return Tagged(value.tag, each_payload(value.value, path))
+                    raise _wrong(shape, value)
+                return Tagged(value.tag, each_payload(value.value))
 
             return tagged
 
         case CarrierOf(carried, make):
             carrier_tag = carried.__name__
 
-            def carrier(value: Value, path: str) -> Any:
+            def carrier(value: Value) -> Any:
                 if not isinstance(value, Tagged) or value.tag != carrier_tag:
-                    raise _wrong(shape, value, path)
+                    raise _wrong(shape, value)
                 body = value.value
                 if not isinstance(body, str):
                     raise ShapeError(
-                        path,
+                        "",
                         f"`{carrier_tag}` carries a string, found {describe(body)}",
                     )
                 try:
@@ -282,7 +311,7 @@ def build(shape: Shape, memo: _Memo | None = None) -> Decoder:
                     return built
                 except (ValueError, ArithmeticError) as exc:
                     raise ShapeError(
-                        path, f'`{carrier_tag} "{body}"` is not valid: {exc}'
+                        "", f'`{carrier_tag} "{body}"` is not valid: {exc}'
                     ) from None
 
             return carrier
@@ -295,7 +324,7 @@ def build(shape: Shape, memo: _Memo | None = None) -> Decoder:
             # cell is read through rather than compiled again.
             key = id(cell)
             if (compiling := memo.get(key)) is not None:
-                return lambda value, path: compiling[0](value, path)
+                return lambda value: compiling[0](value)
             landed: list[Decoder] = []
             memo[key] = landed
             denoted = build(cell[0], memo)
@@ -332,7 +361,7 @@ def _build_record(shape: Shape, cls: type, memo: _Memo) -> Decoder:
         # Already being built, so this is a reference back into a shape that
         # contains itself.  Forward to the decoder that will land in the cell
         # once the outer build finishes.
-        return lambda value, path: pending[0](value, path)
+        return lambda value: pending[0](value)
     if (done := cls.__dict__.get(_SLOT)) is not None:
         decoder: Decoder = done
         return decoder
@@ -357,27 +386,30 @@ def _build_record(shape: Shape, cls: type, memo: _Memo) -> Decoder:
         if field.init
     )
 
-    def record(value: Value, path: str) -> Any:
+    def record(value: Value) -> Any:
         # Always tagged, and always with the class's own name -- which is what
         # a union keys on.
         if not isinstance(value, Tagged) or value.tag != tag:
-            raise _wrong(shape, value, path)
+            raise _wrong(shape, value)
         body = value.value
         if not isinstance(body, frozendict):
-            raise ShapeError(path, f"expected an object, found {describe(body)}")
+            raise ShapeError("", f"expected an object, found {describe(body)}")
         kwargs: dict[str, Any] = {}
         for name, key, decode_field, required in plan:
             if key in body:
-                kwargs[name] = decode_field(body[key], f"{path}.{key}")
+                try:
+                    kwargs[name] = decode_field(body[key])
+                except ShapeError as exc:
+                    raise _under(f".{key}", exc) from None
             elif required:
-                raise ShapeError(path, f"missing key `{key}`")
+                raise ShapeError("", f"missing key `{key}`")
         try:
             built: Any = cls(**kwargs)
             return built
         except (ValueError, ArithmeticError) as exc:
             # A validating `__post_init__` fails here; it surfaces as a shape
             # error with a path, like every other way a document can miss.
-            raise ShapeError(path, f"not a valid {tag}: {exc}") from None
+            raise ShapeError("", f"not a valid {tag}: {exc}") from None
 
     cell.append(record)
     try:
@@ -399,7 +431,7 @@ def _build_union(shape: Shape, members: tuple[Shape, ...], memo: _Memo) -> Decod
         for slot in claims(member):
             table[slot] = decoder
 
-    def union(value: Value, path: str) -> Any:
+    def union(value: Value) -> Any:
         # The slot the document fills, then the kind it belongs to.  At most
         # one of the two is claimed -- a member claiming the kind and one
         # claiming a slot within it is the collision `_analyse` refuses -- so
@@ -409,8 +441,8 @@ def _build_union(shape: Shape, members: tuple[Shape, ...], memo: _Memo) -> Decod
         if chosen is None:
             chosen = table.get(kind)
         if chosen is None:
-            raise _wrong(shape, value, path)
-        return chosen(value, path)
+            raise _wrong(shape, value)
+        return chosen(value)
 
     return union
 
@@ -420,7 +452,7 @@ def _build_union(shape: Shape, members: tuple[Shape, ...], memo: _Memo) -> Decod
 # ---------------------------------------------------------------------------
 
 
-def decoder_for[T](shape: TypeForm[T]) -> Callable[[Value, str], T]:
+def decoder_for[T](shape: TypeForm[T]) -> Callable[[Value], T]:
     """Compile a shape, which is what `loads[Shape]` holds on to.
 
     There is no table of these here.  A shape names classes, and a table
@@ -428,5 +460,5 @@ def decoder_for[T](shape: TypeForm[T]) -> Callable[[Value, str], T]:
     process; what is worth keeping is kept on the classes themselves (see
     `_SLOT`), which is both the expensive part and the part that can be
     collected."""
-    compiled: Callable[[Value, str], T] = build(analyse(shape))
+    compiled: Callable[[Value], T] = build(analyse(shape))
     return compiled
